@@ -105,12 +105,24 @@ def _buscar_pedidos(periodo: Periodo):
     return agora_local, inicio, fim, list(pedidos)
 
 
+def _categoria_nome(produto) -> str:
+    cat = getattr(produto, "categoria", None)
+    if cat is None:
+        return "—"
+    nome = getattr(cat, "nome", None)
+    return str(nome) if nome else (str(cat) if cat else "—")
+
+
 def _montar_lojas(pedidos: list[Pedido]) -> list[LojaRelatorio]:
     agrupadas: dict[str, list[PedidoRelatorio]] = defaultdict(list)
 
     for pedido in pedidos:
         itens = [
-            {"produto": item.produto.nome_produto, "quantidade": item.quantidade}
+            {
+                "produto":    item.produto.nome_produto,
+                "categoria":  _categoria_nome(item.produto),
+                "quantidade": item.quantidade,
+            }
             for item in pedido.itens.all()
         ]
         total_itens = sum(int(item["quantidade"]) for item in itens)
@@ -144,149 +156,173 @@ def _css() -> str:
     return """
     @page {
       size: A4;
-      margin: 14mm 12mm 16mm;
-      @bottom-left  { content: "UniStock - Relatório interno"; color: #64748b; font-size: 9px; }
-      @bottom-right { content: "Página " counter(page) " de " counter(pages); color: #64748b; font-size: 9px; }
+      margin: 10mm 13mm 14mm;
+      @bottom-left  { content: "UniStock — Uso interno"; color: #9ca3af; font-size: 7.5px; }
+      @bottom-right { content: "Pág. " counter(page) " / " counter(pages); color: #9ca3af; font-size: 7.5px; }
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #f1f5f9;
-      color: #172033;
+      background: #fff;
+      color: #111827;
       font-family: Arial, Helvetica, sans-serif;
-      font-size: 12px;
-      line-height: 1.45;
+      font-size: 11px;
+      line-height: 1.4;
     }
 
-    /* ── Hero ── */
+    /* ── Cabeçalho ── */
     .hero {
-      background: #0f172a;
-      color: white;
-      padding: 24px;
-      border-radius: 18px;
-      margin-bottom: 18px;
-    }
-    .eyebrow {
-      color: #93c5fd;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      margin-bottom: 8px;
+      border-bottom: 2px solid #e5e7eb;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
     }
     .badge-periodo {
       display: inline-block;
-      background: #1d4ed8;
-      color: white;
-      font-size: 9px;
-      font-weight: 900;
-      letter-spacing: 1.5px;
+      background: #1a56a0;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
       text-transform: uppercase;
-      padding: 3px 10px;
-      border-radius: 999px;
-      margin-bottom: 10px;
+      padding: 4px 10px;
+      vertical-align: middle;
+      margin-left: 8px;
     }
-    h1 { margin: 0; font-size: 28px; letter-spacing: -0.5px; }
-    .hero p { margin: 8px 0 0; color: #cbd5e1; font-size: 12px; }
+    h1 {
+      display: inline;
+      font-size: 16px;
+      font-weight: 700;
+      color: #111827;
+      margin: 0;
+    }
+    .hero-meta {
+      color: #9ca3af;
+      font-size: 9px;
+      margin: 3px 0 0;
+    }
+    .hero-meta b { color: #6b7280; font-weight: 600; }
 
     /* ── Métricas ── */
-    .metrics { margin-bottom: 18px; }
+    .metrics { margin-bottom: 14px; }
     .metric {
-      background: #ffffff;
-      border: 1px solid #dbe3ef;
-      border-radius: 14px;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-top: 3px solid #1a56a0;
       display: inline-block;
-      margin-right: 1.2%;
-      padding: 13px 14px;
+      margin-right: 1.5%;
+      padding: 8px 14px 7px;
       vertical-align: top;
-      width: 23.35%;
+      width: 31.33%;
     }
-    .metric:last-child { margin-right: 0; }
-    .metric span {
-      color: #64748b;
+    .metric:nth-child(2) { border-top-color: #b45309; }
+    .metric:nth-child(3) { border-top-color: #6d28d9; margin-right: 0; }
+    .metric-label {
+      color: #9ca3af;
       display: block;
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: 1.4px;
+      font-size: 7.5px;
+      font-weight: 700;
+      letter-spacing: 1px;
       text-transform: uppercase;
+      margin-bottom: 3px;
     }
-    .metric strong { color: #1d4ed8; display: block; font-size: 24px; margin-top: 5px; }
+    .metric-value {
+      display: block;
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1;
+      color: #111827;
+    }
 
     /* ── Loja ── */
     .store {
-      background: white;
-      border: 1px solid #dbe3ef;
-      border-radius: 16px;
       margin-bottom: 14px;
-      overflow: hidden;
       page-break-inside: avoid;
+      border: 1px solid #c5cfe0;
+      border-radius: 8px;
+      overflow: hidden;
     }
     .store-header {
-      align-items: center;
-      background: #e8eef7;
-      border-bottom: 1px solid #dbe3ef;
-      display: flex;
-      justify-content: space-between;
-      padding: 12px 14px;
+      background: #1a56a0;
+      padding: 7px 10px;
     }
-    .store-title { color: #0f172a; font-size: 15px; font-weight: 900; text-transform: uppercase; }
-    .store-total { color: #1d4ed8; font-size: 11px; font-weight: 800; }
+    .store-title {
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+    .store-total {
+      color: #bfdbfe;
+      font-size: 9px;
+      margin-top: 1px;
+    }
+    .store-total b { color: #fff; }
 
-    /* ── Pedido ── */
-    .pedido {
-      padding: 13px 14px 16px;
-      border-bottom: 1px solid #e5eaf2;
-      page-break-inside: avoid;
-    }
-    .pedido:last-child { border-bottom: 0; }
-    .pedido-top { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-    .pedido-id  { color: #0f172a; font-size: 13px; font-weight: 900; }
-    .meta       { color: #64748b; font-size: 11px; margin-top: 2px; }
-    .status {
-      border-radius: 999px;
-      border: 1px solid #bfdbfe;
-      background: #eff6ff;
-      color: #1d4ed8;
-      font-size: 10px;
-      font-weight: 900;
-      height: fit-content;
-      padding: 5px 9px;
+    /* ── Tabela única por loja ── */
+    table { border-collapse: collapse; width: 100%; }
+    thead tr { background: #dce4ef; }
+    th {
+      border-bottom: 1px solid #c5cfe0;
+      border-right: 1px solid #c5cfe0;
+      color: #1e3a5f;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      padding: 6px 8px;
+      text-align: left;
       text-transform: uppercase;
       white-space: nowrap;
     }
-    .status-entregue  { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
-    .status-cancelado { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
-
-    /* ── Tabela ── */
-    table { border-collapse: collapse; width: 100%; }
-    th {
-      background: #172033;
-      color: white;
-      font-size: 10px;
-      letter-spacing: 1px;
-      padding: 8px;
-      text-align: left;
-      text-transform: uppercase;
+    th:last-child { border-right: 0; }
+    td {
+      border-bottom: 1px solid #e8edf5;
+      border-right: 1px solid #e8edf5;
+      color: #1e293b;
+      font-size: 11px;
+      padding: 5px 8px;
+      vertical-align: middle;
     }
-    th:last-child, td:last-child { text-align: center; width: 90px; }
-    td { border-bottom: 1px solid #e5eaf2; color: #263248; padding: 8px; }
-    tr:nth-child(even) td { background: #f8fafc; }
+    td:last-child { border-right: 0; }
+    tr:last-child td { border-bottom: 0; }
+    tr:nth-child(even) td { background: #f0f4fa; }
 
-    .descricao {
-      background: #f8fafc;
-      border-left: 3px solid #1d4ed8;
-      color: #475569;
-      margin: 9px 0;
-      padding: 8px 10px;
-    }
-    .empty {
-      background: white;
-      border: 1px solid #dbe3ef;
-      border-radius: 16px;
-      color: #64748b;
-      font-size: 14px;
+    .col-produto  { font-weight: 700; font-size: 11.5px; width: 30%; }
+    .col-cat      { color: #4b5563; font-size: 10.5px; width: 18%; }
+    .col-qtd      { font-weight: 800; font-size: 13px; color: #1a56a0; text-align: center; width: 7%; }
+    .col-resp     { color: #4b5563; font-size: 9.5px; width: 22%; }
+    .col-resp b   { color: #1e293b; font-weight: 700; font-size: 10.5px; display: block; }
+    .col-status   { text-align: center; width: 10%; padding: 0; }
+
+    th.col-qtd    { text-align: center; }
+    th.col-status { text-align: center; }
+
+    /* status como célula colorida (estilo badge de fundo) */
+    .td-status {
+      font-size: 8.5px;
       font-weight: 700;
-      padding: 40px;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 5px 6px;
+      vertical-align: middle;
+    }
+    .td-entregue  { background: #d1fae5; color: #065f46; }
+    .td-pendente  { background: #fef3c7; color: #92400e; }
+    .td-cancelado { background: #ffe4e6; color: #9f1239; }
+
+    .obs {
+      color: #94a3b8;
+      font-size: 9px;
+      font-style: italic;
+      margin-top: 2px;
+    }
+
+    .empty {
+      border: 1px solid #d1d5db;
+      color: #9ca3af;
+      font-size: 12px;
+      padding: 32px;
       text-align: center;
     }
     """
@@ -294,62 +330,68 @@ def _css() -> str:
 
 # ─── HTML ─────────────────────────────────────────────────────────────────────
 
-def _status_class(status: str) -> str:
+def _td_status_class(status: str) -> str:
     s = status.lower()
     if s == "entregue":
-        return "status status-entregue"
+        return "td-status td-entregue"
     if s == "cancelado":
-        return "status status-cancelado"
-    return "status"
+        return "td-status td-cancelado"
+    return "td-status td-pendente"
 
 
 def _html(context: dict) -> str:
     lojas_html = ""
     for loja in context["lojas"]:
-        pedidos_html = ""
+        linhas = ""
         for pedido in loja.pedidos:
-            linhas = "".join(
-                f"<tr><td>{escape(str(item['produto']))}</td>"
-                f"<td>{item['quantidade']} un</td></tr>"
-                for item in pedido.itens
-            )
-            descricao = (
-                f'<div class="descricao">{escape(pedido.descricao)}</div>'
+            td_status = f'<td class="col-status {_td_status_class(pedido.status)}">{escape(pedido.status)}</td>'
+            obs = (
+                f'<div class="obs">{escape(pedido.descricao)}</div>'
                 if pedido.descricao else ""
             )
-            pedidos_html += f"""
-              <div class="pedido">
-                <div class="pedido-top">
-                  <div>
-                    <div class="pedido-id">Pedido #{escape(pedido.id)}</div>
-                    <div class="meta">{pedido.hora} · Responsável: {escape(pedido.responsavel)}</div>
-                  </div>
-                  <div class="{_status_class(pedido.status)}">{escape(pedido.status)}</div>
-                </div>
-                {descricao}
-                <table>
-                  <thead><tr><th>Produto</th><th>Qtd</th></tr></thead>
-                  <tbody>{linhas}</tbody>
-                </table>
-              </div>
-            """
+            for item in pedido.itens:
+                linhas += f"""
+                  <tr>
+                    <td class="col-produto">{escape(str(item['produto']))}{obs}</td>
+                    <td class="col-cat">{escape(str(item['categoria']))}</td>
+                    <td class="col-qtd">{item['quantidade']}</td>
+                    {td_status}
+                    <td class="col-resp">
+                      <b>{escape(pedido.responsavel)}</b>
+                      {pedido.hora}
+                    </td>
+                  </tr>
+                """
+                obs = ""
 
         lojas_html += f"""
           <section class="store">
             <div class="store-header">
-              <div class="store-title">{escape(loja.nome)}</div>
-              <div class="store-total">{len(loja.pedidos)} pedidos · {loja.total_itens} itens</div>
+              <div class="store-title">Loja: {escape(loja.nome)}</div>
+              <div class="store-total">
+                <b>{len(loja.pedidos)}</b> pedidos &nbsp;·&nbsp; <b>{loja.total_itens}</b> itens
+              </div>
             </div>
-            {pedidos_html}
+            <table>
+              <thead>
+                <tr>
+                  <th class="col-produto">Produto</th>
+                  <th class="col-cat">Categoria</th>
+                  <th class="col-qtd">Qtd</th>
+                  <th class="col-status">Status</th>
+                  <th class="col-resp">Responsável</th>
+                </tr>
+              </thead>
+              <tbody>{linhas}</tbody>
+            </table>
           </section>
         """
 
     corpo = lojas_html or '<div class="empty">Nenhum pedido registrado neste período.</div>'
 
-    # 4 métricas: pedidos, itens, lojas, média de itens/pedido
     total_pedidos = context["total_pedidos"]
     total_itens   = context["total_itens"]
-    media = round(total_itens / total_pedidos, 1) if total_pedidos else 0
+    n_lojas       = len(context["lojas"])
 
     return f"""
     <!doctype html>
@@ -360,19 +402,28 @@ def _html(context: dict) -> str:
       </head>
       <body>
         <header class="hero">
-          <div class="badge-periodo">Relatório {escape(context["periodo_label"])}</div>
-          <h1>Pedidos por loja</h1>
-          <p>
-            Período: {escape(context["intervalo"])} ·
-            Emitido em {context["data"]} às {context["hora"]} · UniStock
+          <h1>Pedidos das lojas</h1>
+          <span class="badge-periodo">{escape(context["periodo_label"])}</span>
+          <p class="hero-meta">
+            <b>Período:</b> {escape(context["intervalo"])}
+            &nbsp;·&nbsp;
+            <b>Emitido em</b> {context["data"]} às {context["hora"]}
           </p>
         </header>
 
         <section class="metrics">
-          <div class="metric"><span>Total de pedidos</span><strong>{total_pedidos}</strong></div>
-          <div class="metric"><span>Total de itens</span><strong>{total_itens}</strong></div>
-          <div class="metric"><span>Lojas com pedidos</span><strong>{len(context["lojas"])}</strong></div>
-          <div class="metric"><span>Média itens/pedido</span><strong>{media}</strong></div>
+          <div class="metric">
+            <span class="metric-label">Pedidos</span>
+            <strong class="metric-value">{total_pedidos}</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Itens</span>
+            <strong class="metric-value">{total_itens}</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Lojas</span>
+            <strong class="metric-value">{n_lojas}</strong>
+          </div>
         </section>
 
         {corpo}

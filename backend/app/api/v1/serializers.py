@@ -111,6 +111,7 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
             Notificacao.objects.create(
                 usuario=gerente,
                 pedido=pedido,
+                loja=pedido.loja,
                 tipo="novo_pedido",
                 titulo="Novo pedido recebido",
                 mensagem=(
@@ -122,6 +123,7 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
         Notificacao.objects.create(
             usuario=user,
             pedido=pedido,
+            loja=pedido.loja,
             tipo="pedido_criado",
             titulo="Pedido criado com sucesso",
             mensagem=f"Seu pedido para {pedido.loja.nome_loja} foi enviado para analise.",
@@ -332,11 +334,13 @@ class VendaCreateSerializer(serializers.Serializer):
 class NotificacaoSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source="public_id", read_only=True)
     pedido = serializers.UUIDField(source="pedido.public_id", read_only=True)
+    loja_id = serializers.UUIDField(source="loja.public_id", read_only=True)
+    loja_nome = serializers.CharField(source="loja.nome_loja", read_only=True)
     criada_em = serializers.DateTimeField(source="created_at", read_only=True)
 
     class Meta:
         model = Notificacao
-        fields = ["id", "pedido", "tipo", "titulo", "mensagem", "lida", "criada_em"]
+        fields = ["id", "pedido", "loja_id", "loja_nome", "tipo", "titulo", "mensagem", "lida", "criada_em"]
 
 
 class ProdutoSerializer(serializers.ModelSerializer):
@@ -507,8 +511,21 @@ class EstoqueUpdateSerializer(EstoqueWriteSerializer):
     def update(self, instance, validated_data):
         estoque = super().update(instance, validated_data)
         request = self.context.get("request")
-        notificar_estoque_baixo(
-            estoque,
-            usuario_editor=getattr(request, "user", None),
-        )
+
+        if estoque.quantidade_minima > 0 and estoque.quantidade_atual > estoque.quantidade_minima:
+            chave_mensagem = (
+                f"{estoque.produto.nome_produto} esta com estoque baixo na loja "
+                f"{estoque.loja.nome_loja}."
+            )
+            Notificacao.objects.filter(
+                tipo="estoque_baixo",
+                mensagem__startswith=chave_mensagem,
+                lida=False,
+            ).delete()
+        else:
+            notificar_estoque_baixo(
+                estoque,
+                usuario_editor=getattr(request, "user", None),
+            )
+
         return estoque

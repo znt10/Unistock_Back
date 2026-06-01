@@ -247,7 +247,7 @@ class PedidoViewSet( viewsets.ModelViewSet):
                 produto=item.produto,
                 defaults={
                     'quantidade_atual': 0,
-                    'quantidade_minima': 0,
+                    'quantidade_minima': item.produto.estoque_minimo_sugerido,
                 }
             )
             estoque.quantidade_atual += item.quantidade

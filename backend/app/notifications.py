@@ -50,6 +50,7 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
             tipo="estoque_baixo",
             titulo=titulo,
             mensagem__startswith=chave_mensagem,
+            lida=False,
         ).exists()
 
         if ja_existe:
@@ -57,6 +58,7 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
 
         Notificacao.objects.create(
             usuario=usuario,
+            loja=estoque.loja,
             tipo="estoque_baixo",
             titulo=titulo,
             mensagem=mensagem,

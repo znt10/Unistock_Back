@@ -85,18 +85,6 @@ class EstoqueViewSet(viewsets.ModelViewSet,ResponsavelOuAdminMixin):
         return queryset.filter(loja__responsavel=user)
 
     def list(self, request, *args, **kwargs):
-        estoques_baixos = self.filter_queryset(
-            self.get_queryset()
-            .select_related('loja__responsavel', 'produto')
-            .filter(
-                quantidade_minima__gt=0,
-                quantidade_atual__lte=F('quantidade_minima'),
-            )
-        )
-
-        for estoque in estoques_baixos:
-            notificar_estoque_baixo(estoque, usuario_editor=request.user)
-
         return super().list(request, *args, **kwargs)
 
     def _validar_loja_do_responsavel(self, user, loja):
@@ -247,7 +235,7 @@ class PedidoViewSet( viewsets.ModelViewSet):
                 produto=item.produto,
                 defaults={
                     'quantidade_atual': 0,
-                    'quantidade_minima': 0,
+                    'quantidade_minima': item.produto.estoque_minimo_sugerido,
                 }
             )
             estoque.quantidade_atual += item.quantidade

@@ -15,12 +15,6 @@ A API e responsavel pelo gerenciamento de usuarios, lojas, produtos, estoque e p
 
 ## Como Rodar
 
-Entre na pasta do backend:
-
-```powershell
-cd "D:\5 Periodo\backend"
-```
-
 Suba o container:
 
 ```powershell
@@ -56,7 +50,7 @@ ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
 
-SECRET_KEY=f+c^2ef777*@@(ks2t@!)-lchgc2ad$$u@!z=7ahiz8bcg307a)
+SECRET_KEY=zjgi%%1n4urQXXme1eZC^tqg=ehlqtomf)S23X@__0yt752QgP
 
 DB_ENGINE=django.db.backends.mysql
 DB_NAME=p5

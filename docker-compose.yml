@@ -1,7 +1,28 @@
 services:
+  db:
+    image: mysql:8.0
+    container_name: unistock_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "12345"
+      MYSQL_DATABASE: p5
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build: .
     container_name: unistock
+    restart: on-failure
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - .:/app
     ports:
@@ -9,6 +30,7 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: host.docker.internal
-      DJANGO_SUPERUSER_EMAIL: admin@email.com
-      DJANGO_SUPERUSER_PASSWORD: UNIFIP@123
+      DB_HOST: db
+
+volumes:
+  mysql_data:

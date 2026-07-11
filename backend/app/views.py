@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
@@ -52,11 +53,16 @@ class CookieTokenRefreshView(TokenRefreshView):
         try:
             serializer = TokenRefreshSerializer(data={"refresh": refresh_token})
             serializer.is_valid(raise_exception=True)
-            response = Response(serializer.validated_data, status=status.HTTP_200_OK)
         except TokenError as exc:
             raise InvalidToken(exc.args[0])
 
-        access_token = response.data.get("access")
+        # Token renovado vai apenas no cookie HTTP-only, nunca no corpo.
+        response = Response(
+            {"detail": "Token atualizado."},
+            status=status.HTTP_200_OK,
+        )
+
+        access_token = serializer.validated_data.get("access")
         if access_token:
             response.set_cookie(
                 key="access_token",
@@ -74,6 +80,8 @@ class CookieTokenRefreshView(TokenRefreshView):
 class LoginView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
 
     def post(self, request):
         email = request.data.get("email")
@@ -104,6 +112,8 @@ class LoginView(APIView):
 
         loja_vinculada = Loja.objects.filter(responsavel=user).first()
 
+        # Tokens vao apenas nos cookies HTTP-only abaixo — nunca no corpo,
+        # para nao ficarem acessiveis ao JavaScript (roubo via XSS).
         response = Response(
             {
                 "message": "Login realizado com sucesso",
@@ -119,8 +129,6 @@ class LoginView(APIView):
                     if loja_vinculada
                     else None,
                 },
-                "access": str(access),
-                "refresh": str(refresh),
             }
         )
 

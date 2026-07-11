@@ -2,15 +2,21 @@ import os
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 
 class Command(BaseCommand):
     help = "Create or update the default admin user."
 
     def handle(self, *args, **options):
-        email = os.getenv("DJANGO_SUPERUSER_EMAIL", "admin@email.com")
-        password = os.getenv("DJANGO_SUPERUSER_PASSWORD", "UNIFIP@123")
+        email = os.getenv("DJANGO_SUPERUSER_EMAIL")
+        password = os.getenv("DJANGO_SUPERUSER_PASSWORD")
+
+        if not email or not password:
+            raise CommandError(
+                "DJANGO_SUPERUSER_EMAIL e DJANGO_SUPERUSER_PASSWORD precisam "
+                "estar definidas no ambiente para criar/atualizar o admin."
+            )
 
         User = get_user_model()
         user, created = User.objects.get_or_create(

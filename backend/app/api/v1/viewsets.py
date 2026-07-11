@@ -328,6 +328,18 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
         id_loja = data.get('id_loja') # ID vindo do select do React
         tipo_usuario = data.get('tipo_usuario')
 
+        requester_is_admin = bool(
+            request.user
+            and request.user.is_authenticated
+            and is_gerente_ou_admin(request.user)
+        )
+
+        if tipo_usuario == 'gerente' and not requester_is_admin:
+            return Response(
+                {"error": "Apenas um gerente/admin autenticado pode cadastrar outro gerente."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
             user = serializer.save() # Cria o usuário

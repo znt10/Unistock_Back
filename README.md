@@ -50,7 +50,7 @@ ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
 CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
 
-SECRET_KEY=zjgi%%1n4urQXXme1eZC^tqg=ehlqtomf)S23X@__0yt752QgP
+SECRET_KEY=<gere-uma-chave-secreta-local-e-nao-commite>
 
 DB_ENGINE=django.db.backends.mysql
 DB_NAME=p5
@@ -61,23 +61,11 @@ DB_PORT=3306
 
 DJANGO_SETTINGS_MODULE=backend.settings
 
-
-
+DJANGO_SUPERUSER_EMAIL=<seu-email-de-admin-local>
+DJANGO_SUPERUSER_PASSWORD=<defina-uma-senha-forte-local>
 ```
 
-Login:
-
-```text
-admin@email.com
-```
-
-Senha:
-
-```text
-UNIFIP@123
-```
-
-O usuario admin padrao e criado/atualizado automaticamente ao subir o Docker.
+O usuario admin padrao e criado/atualizado automaticamente ao subir o Docker, usando `DJANGO_SUPERUSER_EMAIL`/`DJANGO_SUPERUSER_PASSWORD` do `.env` (obrigatorias — o container nao cria admin sem elas).
 
 ```text
 grupo: Admin

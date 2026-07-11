@@ -53,11 +53,16 @@ class CookieTokenRefreshView(TokenRefreshView):
         try:
             serializer = TokenRefreshSerializer(data={"refresh": refresh_token})
             serializer.is_valid(raise_exception=True)
-            response = Response(serializer.validated_data, status=status.HTTP_200_OK)
         except TokenError as exc:
             raise InvalidToken(exc.args[0])
 
-        access_token = response.data.get("access")
+        # Token renovado vai apenas no cookie HTTP-only, nunca no corpo.
+        response = Response(
+            {"detail": "Token atualizado."},
+            status=status.HTTP_200_OK,
+        )
+
+        access_token = serializer.validated_data.get("access")
         if access_token:
             response.set_cookie(
                 key="access_token",
@@ -107,6 +112,8 @@ class LoginView(APIView):
 
         loja_vinculada = Loja.objects.filter(responsavel=user).first()
 
+        # Tokens vao apenas nos cookies HTTP-only abaixo — nunca no corpo,
+        # para nao ficarem acessiveis ao JavaScript (roubo via XSS).
         response = Response(
             {
                 "message": "Login realizado com sucesso",
@@ -122,8 +129,6 @@ class LoginView(APIView):
                     if loja_vinculada
                     else None,
                 },
-                "access": str(access),
-                "refresh": str(refresh),
             }
         )
 

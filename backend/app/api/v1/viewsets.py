@@ -1,8 +1,7 @@
-from tokenize import group
-
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime, time
@@ -13,7 +12,7 @@ from django.contrib.auth.models import User
 from django.db.models import F
 
 from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, Notificacao
-from .mixins import ApenasAdminPodeCriarMixin, ResponsavelOuAdminMixin, UserOuAdminMixin
+from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
     EstoqueCreateSerializer,
     PedidoSerializer,
@@ -62,7 +61,10 @@ class LojaViewSet(viewsets.ModelViewSet):
 
 
 # 🔹 ESTOQUE
-class EstoqueViewSet(viewsets.ModelViewSet,ResponsavelOuAdminMixin):
+# Nao usa ResponsavelOuAdminMixin: o escopo de Estoque e por loja
+# (loja__responsavel), nao por campo responsavel proprio, e todos os
+# metodos relevantes ja sao definidos localmente abaixo.
+class EstoqueViewSet(viewsets.ModelViewSet):
     queryset = Estoque.objects.all()
     serializer_class = EstoqueSerializer
     permission_classes = [IsAuthenticated, IsGerenteOrAdministradorOrResponsavel]
@@ -171,7 +173,8 @@ class ItemPedidoViewSet(ResponsavelOuAdminMixin,viewsets.ModelViewSet):
         if is_gerente_ou_admin(user):
             return ItemPedido.objects.all()
 
-        return ItemPedido.objects.filter(pedido__responsavel=user)
+        # Mesma regra de tenancy do PedidoViewSet: escopo pela loja do usuario
+        return ItemPedido.objects.filter(pedido__loja__responsavel=user)
 
 
 
@@ -322,7 +325,13 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
             status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
 
-    @action(detail=False, methods=['post'], permission_classes=[AllowAny]) # Permitir deslogado criar conta
+    @action(
+        detail=False,
+        methods=['post'],
+        permission_classes=[AllowAny],  # Permitir deslogado criar conta
+        throttle_classes=[ScopedRateThrottle],
+        throttle_scope='registro',
+    )
     def registrar(self, request):
         data = request.data
         id_loja = data.get('id_loja') # ID vindo do select do React

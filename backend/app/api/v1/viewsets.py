@@ -1,7 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime, time
@@ -30,6 +30,16 @@ from .serializers import (
 from app.permissions import IsGerenteOrAdministrador, IsGerenteOrAdministradorOrResponsavel
 from app.notifications import notificar_estoques_baixos_do_pedido, notificar_estoque_baixo
 from rest_framework.decorators import action
+
+class RegistroRateThrottle(AnonRateThrottle):
+    """Limita o cadastro publico (anonimo) usando a taxa 'registro'.
+
+    Herda de AnonRateThrottle: usuarios autenticados (ex: admin criando
+    gerentes) nao sao limitados por esta regra.
+    """
+
+    scope = "registro"
+
 
 # 🔹 Helper
 def is_gerente_ou_admin(user):
@@ -329,8 +339,7 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
         detail=False,
         methods=['post'],
         permission_classes=[AllowAny],  # Permitir deslogado criar conta
-        throttle_classes=[ScopedRateThrottle],
-        throttle_scope='registro',
+        throttle_classes=[RegistroRateThrottle],
     )
     def registrar(self, request):
         data = request.data

@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 
 from app.models import Loja
@@ -21,7 +23,20 @@ class LojaSerializer(serializers.ModelSerializer):
             "responsavel",
             "responsavel_nome",
             "ativo",
+            "telefone_whatsapp",
+            "email",
         ]
+
+    def validate_telefone_whatsapp(self, value):
+        if not value:
+            return None
+        # Normaliza para apenas digitos (aceita +55 (83) 99999-8888).
+        digitos = re.sub(r"\D", "", value)
+        if len(digitos) < 10:
+            raise serializers.ValidationError(
+                "Informe o numero com DDD (minimo 10 digitos)."
+            )
+        return digitos
 
     def get_fields(self):
         fields = super().get_fields()

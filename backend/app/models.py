@@ -23,6 +23,12 @@ class Loja(BaseModel):
     endereco = models.CharField(max_length=255)
     ativo = models.BooleanField(default=True)
     responsavel = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    # Numero de WhatsApp DA LOJA (nao do responsavel): e por ele que o bot
+    # identifica de qual loja veio o pedido. Apenas digitos.
+    telefone_whatsapp = models.CharField(
+        max_length=20, unique=True, null=True, blank=True
+    )
+    email = models.EmailField(null=True, blank=True)
 
     def __str__(self):
         return self.nome_loja

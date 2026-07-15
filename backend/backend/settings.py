@@ -173,3 +173,7 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "API do sistema UniStock",
     "VERSION": "1.0.0",
 }
+
+# Token de servico do bot de WhatsApp (endpoints /api/v1/bot/).
+# Vazio = endpoints do bot desativados (nega tudo).
+BOT_SERVICE_TOKEN = os.getenv("BOT_SERVICE_TOKEN", "")

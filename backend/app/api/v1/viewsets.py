@@ -31,6 +31,26 @@ from app.permissions import IsGerenteOrAdministrador, IsGerenteOrAdministradorOr
 from app.notifications import notificar_estoques_baixos_do_pedido, notificar_estoque_baixo
 from rest_framework.decorators import action
 
+def somar_itens_no_estoque(pedido):
+    """Soma os itens do pedido no estoque da loja (pedido ENTREGUE).
+
+    Funcao de modulo para ser reusada pelo site (atualizar_status) e pelo
+    bot de WhatsApp (confirmacao de recebimento).
+    """
+    for item in pedido.itens.select_related('produto').all():
+        estoque, _ = Estoque.objects.get_or_create(
+            loja=pedido.loja,
+            produto=item.produto,
+            defaults={
+                'quantidade_atual': 0,
+                'quantidade_minima': item.produto.estoque_minimo_sugerido,
+            }
+        )
+        estoque.quantidade_atual += item.quantidade
+        estoque.save(update_fields=['quantidade_atual', 'updated_at'])
+        notificar_estoque_baixo(estoque)
+
+
 class RegistroRateThrottle(AnonRateThrottle):
     """Limita o cadastro publico (anonimo) usando a taxa 'registro'.
 
@@ -241,20 +261,6 @@ class PedidoViewSet( viewsets.ModelViewSet):
 
         return queryset
 
-    def _somar_itens_no_estoque(self, pedido):
-        for item in pedido.itens.select_related('produto').all():
-            estoque, _ = Estoque.objects.get_or_create(
-                loja=pedido.loja,
-                produto=item.produto,
-                defaults={
-                    'quantidade_atual': 0,
-                    'quantidade_minima': item.produto.estoque_minimo_sugerido,
-                }
-            )
-            estoque.quantidade_atual += item.quantidade
-            estoque.save(update_fields=['quantidade_atual', 'updated_at'])
-            notificar_estoque_baixo(estoque)
-
     @action(detail=True, methods=['patch'], url_path='status')
     def atualizar_status(self, request, public_id=None):
         pedido = self.get_object()
@@ -277,7 +283,7 @@ class PedidoViewSet( viewsets.ModelViewSet):
         pedido.save(update_fields=['status', 'updated_at'])
 
         if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
-            self._somar_itens_no_estoque(pedido)
+            somar_itens_no_estoque(pedido)
 
         notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
 

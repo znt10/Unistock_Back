@@ -177,3 +177,7 @@ SPECTACULAR_SETTINGS = {
 # Token de servico do bot de WhatsApp (endpoints /api/v1/bot/).
 # Vazio = endpoints do bot desativados (nega tudo).
 BOT_SERVICE_TOKEN = os.getenv("BOT_SERVICE_TOKEN", "")
+
+# Numero de WhatsApp do gerente. Recebe aviso de cada pedido novo e pode pedir
+# o PDF de TODAS as lojas. Vazio = sem gerente (sem aviso; relatorio so por loja).
+GERENTE_WHATSAPP = os.getenv("GERENTE_WHATSAPP", "")

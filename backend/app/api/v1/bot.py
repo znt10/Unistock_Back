@@ -10,6 +10,7 @@ atual da loja, aplicando as mesmas regras de negocio do site
 """
 
 import re
+from datetime import date
 from types import SimpleNamespace
 
 from django.conf import settings
@@ -21,12 +22,32 @@ from rest_framework.views import APIView
 
 from app.models import Loja, Pedido, Produto
 from app.notifications import notificar_estoques_baixos_do_pedido
+from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 from .serializers import PedidoCreateSerializer
 from .viewsets import somar_itens_no_estoque
 
 
 def normalizar_telefone(valor):
     return re.sub(r"\D", "", str(valor or ""))
+
+
+def eh_gerente(telefone):
+    """True se o telefone for o do gerente configurado (GERENTE_WHATSAPP)."""
+    numero = normalizar_telefone(settings.GERENTE_WHATSAPP)
+    return bool(numero) and normalizar_telefone(telefone) == numero
+
+
+def notificacao_gerente(loja, pedido):
+    """Bloco pronto pro bot Node avisar o gerente, ou None se não há gerente."""
+    numero = normalizar_telefone(settings.GERENTE_WHATSAPP)
+    if not numero:
+        return None
+    linhas = [
+        f"• {item.quantidade}x {item.produto.nome_produto}"
+        for item in pedido.itens.all()
+    ]
+    mensagem = f"🧾 Novo pedido #{pedido.id} — {loja.nome_loja}\n" + "\n".join(linhas)
+    return {"telefone": numero, "mensagem": mensagem}
 
 
 class BotTokenPermission(BasePermission):
@@ -167,15 +188,17 @@ class BotPedidoView(BotAPIView):
         serializer.is_valid(raise_exception=True)
         pedido = serializer.save()
 
-        return Response(
-            {
-                "pedido": str(pedido.public_id),
-                "numero": pedido.id,
-                "status": pedido.status,
-                "loja": loja.nome_loja,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        resposta = {
+            "pedido": str(pedido.public_id),
+            "numero": pedido.id,
+            "status": pedido.status,
+            "loja": loja.nome_loja,
+        }
+        notificar = notificacao_gerente(loja, pedido)
+        if notificar:
+            resposta["notificar_gerente"] = notificar
+
+        return Response(resposta, status=status.HTTP_201_CREATED)
 
 
 class BotPedidoConfirmarView(BotAPIView):
@@ -208,3 +231,39 @@ class BotPedidoConfirmarView(BotAPIView):
         )
 
         return Response({"numero": pedido.id, "status": pedido.status})
+
+
+class BotRelatorioView(BotAPIView):
+    """GET /api/v1/bot/relatorio/?telefone=...&periodo=dia|semana|mes&data=AAAA-MM-DD
+
+    Exclusivo do gerente (telefone == GERENTE_WHATSAPP): devolve o PDF de pedidos
+    de TODAS as lojas (o bot Node reenvia como documento no WhatsApp). Qualquer
+    outro telefone recebe 403. `periodo` default "dia"; `data` opcional escolhe um
+    dia/semana/mês específico (default = hoje).
+    """
+
+    def get(self, request):
+        # Só o gerente vê PDF. Loja nenhuma acessa o relatório.
+        if not eh_gerente(request.query_params.get("telefone")):
+            return Response(
+                {"error": "Apenas o gerente pode gerar o relatório."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        periodo = request.query_params.get("periodo", "dia")
+        if periodo not in ("dia", "semana", "mes"):
+            periodo = "dia"
+
+        data_ref = None
+        data_str = request.query_params.get("data")
+        if data_str:
+            try:
+                data_ref = date.fromisoformat(data_str)
+            except ValueError:
+                return Response(
+                    {"error": "Data inválida; use AAAA-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Gerente sempre recebe o relatório de TODAS as lojas.
+        return gerar_relatorio_pedidos_pdf(periodo, data_ref)

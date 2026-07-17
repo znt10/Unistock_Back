@@ -1,12 +1,21 @@
+from unittest import skipUnless
+
 from django.contrib.auth.models import User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from app.models import Estoque, Loja, Pedido, Produto
 
+try:
+    import weasyprint  # noqa: F401
+    HAS_WEASYPRINT = True
+except Exception:
+    HAS_WEASYPRINT = False
+
 TOKEN = "token-de-teste"
 HEADERS = {"HTTP_X_BOT_TOKEN": TOKEN}
 TELEFONE_LOJA = "5583999998888"
+TELEFONE_GERENTE = "5583911112222"
 
 
 @override_settings(BOT_SERVICE_TOKEN=TOKEN)
@@ -199,6 +208,70 @@ class BotApiTests(APITestCase):
             **HEADERS,
         )
         self.assertEqual(response.status_code, 404)
+
+    # --- relatorio PDF: exclusivo do gerente ---
+
+    def test_relatorio_loja_nao_autorizada_403(self):
+        # Sem gerente configurado, ninguém (nem a loja) acessa o relatório.
+        response = self.client.get(
+            "/api/v1/bot/relatorio/", {"telefone": TELEFONE_LOJA}, **HEADERS
+        )
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
+    def test_relatorio_loja_bloqueada_mesmo_com_gerente_403(self):
+        # Loja continua sem acesso mesmo havendo gerente.
+        response = self.client.get(
+            "/api/v1/bot/relatorio/", {"telefone": TELEFONE_LOJA}, **HEADERS
+        )
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
+    def test_relatorio_data_invalida_400(self):
+        response = self.client.get(
+            "/api/v1/bot/relatorio/",
+            {"telefone": TELEFONE_GERENTE, "data": "2026-13-40"},
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # --- gerente (recebe pedidos + relatorio de todas as lojas) ---
+
+    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
+    def test_pedido_notifica_gerente(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 3}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 201)
+        notif = response.data["notificar_gerente"]
+        self.assertEqual(notif["telefone"], TELEFONE_GERENTE)
+        self.assertIn("Coxinha", notif["mensagem"])
+
+    @override_settings(GERENTE_WHATSAPP="")
+    def test_pedido_sem_gerente_nao_notifica(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 1}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn("notificar_gerente", response.data)
+
+    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
+    @skipUnless(HAS_WEASYPRINT, "weasyprint não instalado neste ambiente")
+    def test_gerente_recebe_relatorio_de_todas_as_lojas(self):
+        Pedido.objects.create(responsavel=self.responsavel, loja=self.loja)
+        response = self.client.get(
+            "/api/v1/bot/relatorio/",
+            {"telefone": "+55 (83) 91111-2222"},  # gerente em formato humano
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
 
     # --- serializer da loja aceita os campos novos ---
 

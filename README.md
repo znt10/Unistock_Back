@@ -102,6 +102,23 @@ http://localhost:8000/api/schema/
 http://localhost:8000/api/schema/swagger/
 ```
 
+## Notificacoes assincronas (Celery + Redis)
+
+O compose sobe, alem da API e do MySQL: `redis` (broker), `worker` (Celery) e
+`beat` (agendador com django-celery-beat). Notificacoes por email rodam como
+tasks assincronas:
+
+- Confirmacao de conta: cadastro publico cria a conta inativa e envia email
+  com link de confirmacao (`FRONTEND_URL/confirmar-conta/<token>`, valido por
+  3 dias). Endpoint: `GET /api/v1/user/confirmar/<token>/`.
+- Alerta de estoque baixo: enviado por email ao responsavel quando o estoque
+  cruza o minimo (uma vez por episodio).
+
+Variaveis no `.env` (veja `.env.example`): `CELERY_BROKER_URL`, `EMAIL_HOST`,
+`EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`,
+`DEFAULT_FROM_EMAIL`, `FRONTEND_URL`. Em `DEBUG=True` os emails saem no
+console do worker (nao precisa de SMTP para desenvolver).
+
 ## Observacoes
 
 - O projeto usa MySQL como banco de dados.

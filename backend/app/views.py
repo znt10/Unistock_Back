@@ -12,9 +12,12 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from django.http import HttpRequest, HttpResponse
+from datetime import date
+
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest
 
 from app.models import Loja
+from app.permissions import IsGerenteOrAdministrador
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 
 User = get_user_model()
@@ -30,13 +33,33 @@ def get_user_group_name(user):
     return group.name if group else None
 
 
-def relatorio_pdf(request: HttpRequest,) -> HttpResponse:
-    periodo = request.GET.get("periodo", "dia")
- 
-    if periodo not in ("dia", "semana", "mes"):
-        periodo = "dia"
- 
-    return gerar_relatorio_pedidos_pdf(periodo)
+class RelatorioPdfView(APIView):
+    """GET /gerar_pdf/ — relatório de pedidos de TODAS as lojas.
+
+    Restrito a gerente/admin: o relatório é global, um responsável de loja
+    não deve enxergar os pedidos das outras.
+    """
+
+    permission_classes = [IsAuthenticated, IsGerenteOrAdministrador]
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        periodo = request.GET.get("periodo", "dia")
+        if periodo not in ("dia", "semana", "mes"):
+            periodo = "dia"
+
+        # Data de referência opcional (AAAA-MM-DD). Default: hoje.
+        data_ref = None
+        data_str = request.GET.get("data")
+        if data_str:
+            try:
+                data_ref = date.fromisoformat(data_str)
+            except ValueError:
+                return HttpResponseBadRequest("Parâmetro 'data' inválido; use AAAA-MM-DD.")
+
+        return gerar_relatorio_pedidos_pdf(periodo, data_ref)
+
+
+relatorio_pdf = RelatorioPdfView.as_view()
  
  
 
@@ -90,6 +113,13 @@ class LoginView(APIView):
         user = authenticate(username=email, password=password)
 
         if not user:
+            # Senha certa mas conta inativa = falta confirmar o email.
+            pendente = User.objects.filter(username=email, is_active=False).first()
+            if pendente and pendente.check_password(password):
+                return Response(
+                    {"error": "Conta ainda nao confirmada. Verifique o link enviado por email."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return Response(
                 {"error": "Credenciais invalidas"},
                 status=status.HTTP_401_UNAUTHORIZED,

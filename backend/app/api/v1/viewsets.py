@@ -9,9 +9,14 @@ from django.utils.timezone import make_aware
 
 
 from django.contrib.auth.models import User
-from django.db.models import F
+from django.core import signing
+from django.db.models import F, Q
 
-from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, Notificacao
+from app.models import (
+    Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque,
+    Notificacao, PreferenciaNotificacao,
+)
+from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
     EstoqueCreateSerializer,
@@ -19,6 +24,8 @@ from .serializers import (
     PedidoCreateSerializer,
     PedidoUpdateSerializer,
     ItemPedidoSerializer,
+    MovimentacaoEstoqueSerializer,
+    PreferenciaNotificacaoSerializer,
     ProdutoSerializer,
     UsuarioSerializer,
     LojaSerializer,
@@ -30,6 +37,33 @@ from .serializers import (
 from app.permissions import IsGerenteOrAdministrador, IsGerenteOrAdministradorOrResponsavel
 from app.notifications import notificar_estoques_baixos_do_pedido, notificar_estoque_baixo
 from rest_framework.decorators import action
+
+def somar_itens_no_estoque(pedido):
+    """Soma os itens do pedido no estoque da loja (pedido ENTREGUE).
+
+    Funcao de modulo para ser reusada pelo site (atualizar_status) e pelo
+    bot de WhatsApp (confirmacao de recebimento).
+    """
+    for item in pedido.itens.select_related('produto').all():
+        estoque, _ = Estoque.objects.get_or_create(
+            loja=pedido.loja,
+            produto=item.produto,
+            defaults={
+                'quantidade_atual': 0,
+                'quantidade_minima': item.produto.estoque_minimo_sugerido,
+            }
+        )
+        estoque.quantidade_atual += item.quantidade
+        estoque.save(update_fields=['quantidade_atual', 'updated_at'])
+        MovimentacaoEstoque.objects.create(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA,
+            produto=item.produto,
+            loja_destino=pedido.loja,
+            quantidade=item.quantidade,
+            usuario=pedido.responsavel,
+        )
+        notificar_estoque_baixo(estoque)
+
 
 class RegistroRateThrottle(AnonRateThrottle):
     """Limita o cadastro publico (anonimo) usando a taxa 'registro'.
@@ -60,14 +94,19 @@ def get_user_group_name(user):
     
 # 🔹 LOJA
 class LojaViewSet(viewsets.ModelViewSet):
-    queryset = Loja.objects.all().order_by('id') 
+    queryset = Loja.objects.all().order_by('id')
     serializer_class = LojaSerializer
     lookup_field = 'public_id'
-    
+
     def get_permissions(self):
         if self.action == 'list':
-            return [AllowAny()]
-        return [IsAuthenticated()]
+            # Dados de loja (endereco, responsavel) nao sao publicos.
+            return [IsAuthenticated()]
+        if self.action == 'create':
+            # Criar loja e coisa de gerente/admin.
+            return [IsAuthenticated(), IsGerenteOrAdministrador()]
+        # Editar/apagar: gerente/admin, ou o responsavel na propria loja.
+        return [IsAuthenticated(), IsGerenteOrAdministradorOrResponsavel()]
 
 
 # 🔹 ESTOQUE
@@ -123,6 +162,31 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+# 🔹 MOVIMENTACAO DE ESTOQUE (historico auditavel, somente leitura)
+class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MovimentacaoEstoqueSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'public_id'
+    queryset = MovimentacaoEstoque.objects.none()  # so via get_queryset
+
+    def get_queryset(self):
+        qs = (
+            MovimentacaoEstoque.objects
+            .select_related('produto', 'loja_origem', 'loja_destino', 'usuario')
+            .order_by('-created_at')
+        )
+
+        user = self.request.user
+        if not is_gerente_ou_admin(user):
+            minhas = Loja.objects.filter(responsavel=user)
+            qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
+
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            qs = qs.filter(tipo=tipo)
+        return qs
+
+
 # 🔹 PRODUTO
 class ProdutoViewSet(viewsets.ModelViewSet):
     queryset = Produto.objects.all().order_by('nome_produto')
@@ -131,7 +195,8 @@ class ProdutoViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'list':
-            return [AllowAny()]
+            # Catalogo interno; leitura exige login.
+            return [IsAuthenticated()]
         return [IsAuthenticated(), IsGerenteOrAdministrador()]
 
 
@@ -241,20 +306,6 @@ class PedidoViewSet( viewsets.ModelViewSet):
 
         return queryset
 
-    def _somar_itens_no_estoque(self, pedido):
-        for item in pedido.itens.select_related('produto').all():
-            estoque, _ = Estoque.objects.get_or_create(
-                loja=pedido.loja,
-                produto=item.produto,
-                defaults={
-                    'quantidade_atual': 0,
-                    'quantidade_minima': item.produto.estoque_minimo_sugerido,
-                }
-            )
-            estoque.quantidade_atual += item.quantidade
-            estoque.save(update_fields=['quantidade_atual', 'updated_at'])
-            notificar_estoque_baixo(estoque)
-
     @action(detail=True, methods=['patch'], url_path='status')
     def atualizar_status(self, request, public_id=None):
         pedido = self.get_object()
@@ -277,7 +328,7 @@ class PedidoViewSet( viewsets.ModelViewSet):
         pedido.save(update_fields=['status', 'updated_at'])
 
         if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
-            self._somar_itens_no_estoque(pedido)
+            somar_itens_no_estoque(pedido)
 
         notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
 
@@ -302,6 +353,27 @@ class VendaViewSet(viewsets.GenericViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+# 🔹 PREFERENCIAS DE NOTIFICACAO
+class PreferenciaNotificacaoViewSet(viewsets.GenericViewSet):
+    """GET/PATCH /api/v1/preferencias-notificacao/me/ — sempre do proprio usuario."""
+
+    serializer_class = PreferenciaNotificacaoSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = PreferenciaNotificacao.objects.none()  # rota so via action `me`
+
+    @action(detail=False, methods=['get', 'patch'], url_path='me')
+    def me(self, request):
+        prefs, _ = PreferenciaNotificacao.objects.get_or_create(usuario=request.user)
+
+        if request.method.lower() == 'patch':
+            serializer = self.get_serializer(prefs, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(self.get_serializer(prefs).data)
+
 
 # 🔹 USUÁRIO
 class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
@@ -373,11 +445,57 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
                 try:
                     loja = Loja.objects.get(public_id=id_loja)
                     # Se o seu model Loja tem o campo 'responsavel':
-                    loja.responsavel = user 
+                    loja.responsavel = user
                     loja.save()
                 except Loja.DoesNotExist:
                     return Response({"error": "Loja não encontrada"}, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
+            # 3. Cadastro publico exige confirmacao por email; conta criada por
+            # admin/gerente ja nasce ativa.
+            if not requester_is_admin:
+                user.is_active = False
+                user.save(update_fields=['is_active'])
+                enviar_email_confirmacao.delay(user.id)
+
+            corpo = dict(serializer.data)
+            corpo['detail'] = (
+                'Conta criada. Enviamos um email de confirmacao — verifique sua caixa de entrada.'
+                if not requester_is_admin else 'Conta criada.'
+            )
+            return Response(corpo, status=status.HTTP_201_CREATED)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path=r'confirmar/(?P<token>[^/]+)',
+        permission_classes=[AllowAny],
+    )
+    def confirmar(self, request, token=None):
+        """GET /api/v1/user/confirmar/<token>/ — ativa a conta do email."""
+        try:
+            user_id = validar_token_confirmacao(token)
+        except signing.SignatureExpired:
+            return Response(
+                {"error": "Link de confirmacao expirado. Cadastre-se novamente."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except signing.BadSignature:
+            return Response(
+                {"error": "Link de confirmacao invalido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response(
+                {"error": "Usuario nao encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not user.is_active:
+            user.is_active = True
+            user.save(update_fields=['is_active'])
+
+        return Response({"detail": "Conta confirmada. Voce ja pode fazer login."})

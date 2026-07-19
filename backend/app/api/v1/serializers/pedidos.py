@@ -104,8 +104,8 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
             | User.objects.filter(is_superuser=True)
         ).distinct()
 
-        for gerente in gerentes:
-            Notificacao.objects.create(
+        Notificacao.objects.bulk_create([
+            Notificacao(
                 usuario=gerente,
                 pedido=pedido,
                 loja=pedido.loja,
@@ -116,6 +116,8 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
                     f"{pedido.loja.nome_loja}."
                 ),
             )
+            for gerente in gerentes
+        ])
 
         Notificacao.objects.create(
             usuario=user,

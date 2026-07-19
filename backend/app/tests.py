@@ -1,7 +1,11 @@
+import re
+
+from django.core import mail
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.contrib.auth.models import User, Group,Permission
 from django.contrib.contenttypes.models import ContentType
-from app.models import Loja, Produto, Pedido, ItemPedido, Estoque, Notificacao
+from app.models import Loja, MovimentacaoEstoque, Produto, Pedido, ItemPedido, Estoque, Notificacao
 from app.notifications import notificar_estoque_baixo
 from rest_framework.test import APITestCase
 from rest_framework.test import APIClient
@@ -53,27 +57,30 @@ class PedidoAPITestCase(APITestCase):
 
 
     def test_registro_e_login(self):
-
-        self.client.post("/login/", {
-            "email": "admin",
-            "password": "123"
-            })
-        
-    # registra
+        # registra (conta nasce inativa; email de confirmacao no outbox)
         self.client.post("/api/v1/user/registrar/", {
             "email": "novo@email.com",
             "password": "123456",
             "tipo_usuario": "responsavel"
         })
 
+        # antes de confirmar, login e recusado com mensagem clara
+        response = self.client.post("/login/", {
+            "email": "novo@email.com",
+            "password": "123456"
+        })
+        self.assertEqual(response.status_code, 403)
 
-        self.client.post("/logout/")
+        # confirma pelo link do email
+        token = re.search(r"/confirmar-conta/(\S+)", mail.outbox[-1].body).group(1)
+        response = self.client.get(f"/api/v1/user/confirmar/{token}/")
+        self.assertEqual(response.status_code, 200)
+
         # login
         response = self.client.post("/login/", {
             "email": "novo@email.com",
             "password": "123456"
         })
-
         self.assertEqual(response.status_code, 200)
 
 
@@ -119,6 +126,7 @@ class PedidoAPITestCase(APITestCase):
 
         loja_data = {
             "nome_loja": "Loja Gerente",
+            "cidade": "Patos",
             "endereco": "Rua 1",
             "responsavel": self.gerente.id
         }
@@ -132,11 +140,10 @@ class PedidoAPITestCase(APITestCase):
         url = "/api/v1/pedidos/"
 
         data = {
-            "loja": self.loja.id,
-            "status": "novo",
+            "loja": str(self.loja.public_id),
             "itens": [
                 {
-                    "produto": self.produto.id,
+                    "produto": str(self.produto.public_id),
                     "quantidade": 2
                 }
             ]
@@ -268,4 +275,197 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             ).count(),
             1,
         )
+
+
+class EstoqueIntegridadeTests(APITestCase):
+    """Constraints do Estoque e historico de MovimentacaoEstoque."""
+
+    def setUp(self):
+        self.grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.user = User.objects.create_user(username='resp', password='123')
+        self.gerente = User.objects.create_user(username='ger', password='123')
+        self.gerente.groups.add(self.grupo_gerente)
+
+        self.loja = Loja.objects.create(
+            nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
+            responsavel=self.user,
+        )
+        self.produto = Produto.objects.create(
+            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+        )
+        self.estoque = Estoque.objects.create(
+            loja=self.loja, produto=self.produto,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+
+    def test_nao_permite_estoque_duplicado_para_produto_e_loja(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Estoque.objects.create(
+                loja=self.loja, produto=self.produto,
+                quantidade_atual=5, quantidade_minima=1,
+            )
+
+    def test_nao_permite_estoque_negativo(self):
+        outro = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Estoque.objects.create(
+                loja=self.loja, produto=outro,
+                quantidade_atual=-1, quantidade_minima=0,
+            )
+
+    def test_entrega_de_pedido_registra_movimentacao_entrada(self):
+        from app.api.v1.viewsets import somar_itens_no_estoque
+
+        pedido = Pedido.objects.create(responsavel=self.user, loja=self.loja)
+        ItemPedido.objects.create(
+            pedido=pedido, produto=self.produto, quantidade=4, responsavel=self.user,
+        )
+        somar_itens_no_estoque(pedido)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.ENTRADA)
+        self.assertEqual(mov.loja_destino, self.loja)
+        self.assertEqual(mov.produto, self.produto)
+        self.assertEqual(mov.quantidade, 4)
+        self.assertEqual(mov.usuario, self.user)
+
+    def test_venda_pdv_registra_movimentacao_saida(self):
+        self.client.force_authenticate(self.gerente)
+        response = self.client.post(
+            '/api/v1/vendas/',
+            {
+                'loja_id': str(self.loja.public_id),
+                'itens': [{'produto_id': str(self.produto.public_id), 'quantidade': 3}],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.VENDA_PDV)
+        self.assertEqual(mov.loja_origem, self.loja)
+        self.assertEqual(mov.quantidade, 3)
+        self.assertEqual(mov.usuario, self.gerente)
+        self.estoque.refresh_from_db()
+        self.assertEqual(self.estoque.quantidade_atual, 7)
+
+    def test_ajuste_manual_registra_delta(self):
+        self.client.force_authenticate(self.gerente)
+        response = self.client.patch(
+            f'/api/v1/estoque/{self.estoque.public_id}/',
+            {'quantidade_atual': 6},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.AJUSTE)
+        self.assertEqual(mov.quantidade, -4)  # 10 -> 6
+        self.assertEqual(mov.loja_origem, self.loja)
+        self.assertEqual(mov.usuario, self.gerente)
+
+
+class NotificacaoAssincronaTests(APITestCase):
+    """Confirmacao de conta por email e alerta assincrono de estoque baixo.
+
+    CELERY_TASK_ALWAYS_EAGER esta ativo em testes: .delay() roda na hora e o
+    email cai em django.core.mail.outbox.
+    """
+
+    def setUp(self):
+        Group.objects.get_or_create(name='Responsavel')
+        Group.objects.get_or_create(name='Gerente')
+
+    def test_registro_publico_cria_conta_inativa_e_envia_email(self):
+        response = self.client.post("/api/v1/user/registrar/", {
+            "email": "ana@email.com",
+            "password": "123456",
+            "tipo_usuario": "responsavel",
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+
+        user = User.objects.get(username="ana@email.com")
+        self.assertFalse(user.is_active)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("/confirmar-conta/", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].to, ["ana@email.com"])
+
+    def test_token_invalido_400(self):
+        response = self.client.get("/api/v1/user/confirmar/token-falso/")
+        self.assertEqual(response.status_code, 400)
+
+    def test_alerta_estoque_baixo_envia_email_ao_responsavel(self):
+        responsavel = User.objects.create_user(
+            username='resp@email.com', email='resp@email.com', password='123456',
+        )
+        loja = Loja.objects.create(
+            nome_loja='Loja Email', cidade='Patos', endereco='Rua 1',
+            responsavel=responsavel,
+        )
+        produto = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto,
+            quantidade_atual=1, quantidade_minima=5,
+        )
+
+        notificar_estoque_baixo(estoque)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['resp@email.com'])
+        self.assertIn('Coca', mail.outbox[0].body)
+
+        # Mesmo episodio nao reenvia email
+        notificar_estoque_baixo(estoque)
+        self.assertEqual(len(mail.outbox), 1)
+
+
+class PreferenciaNotificacaoTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='pref@email.com', email='pref@email.com', password='123456',
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_get_cria_preferencia_com_defaults(self):
+        response = self.client.get('/api/v1/preferencias-notificacao/me/')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['email_ativo'])
+        self.assertFalse(response.data['digest_ativo'])
+        self.assertEqual(response.data['digest_dias_semana'], '1,2,3,4,5')
+
+    def test_patch_atualiza_preferencia(self):
+        response = self.client.patch(
+            '/api/v1/preferencias-notificacao/me/',
+            {'digest_ativo': True, 'digest_horario': '08:30',
+             'digest_dias_semana': '1,3,5', 'telefone_whatsapp': '+55 (83) 9999-0000'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data['digest_ativo'])
+        self.assertEqual(response.data['digest_dias_semana'], '1,3,5')
+        self.assertEqual(response.data['telefone_whatsapp'], '558399990000')
+
+    def test_dias_invalidos_400(self):
+        response = self.client.patch(
+            '/api/v1/preferencias-notificacao/me/',
+            {'digest_dias_semana': '1,8'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_email_desativado_nao_envia_alerta(self):
+        from app.models import PreferenciaNotificacao
+
+        PreferenciaNotificacao.objects.create(usuario=self.user, email_ativo=False)
+        loja = Loja.objects.create(
+            nome_loja='Loja Pref', cidade='Patos', endereco='Rua 1',
+            responsavel=self.user,
+        )
+        produto = Produto.objects.create(nome_produto='Cafe', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=5,
+        )
+
+        notificar_estoque_baixo(estoque)
+
+        # Notificacao no sino continua; email nao sai.
+        self.assertEqual(Notificacao.objects.filter(usuario=self.user).count(), 1)
+        self.assertEqual(len(mail.outbox), 0)
 

@@ -1,7 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
-from app.models import Estoque, ItemPedido, Loja, Pedido, Produto
+from app.models import Estoque, ItemPedido, Loja, MovimentacaoEstoque, Pedido, Produto
 from app.notifications import notificar_estoque_baixo
 
 
@@ -158,6 +158,13 @@ class VendaCreateSerializer(serializers.Serializer):
                 estoque.quantidade_atual -= baixa
                 quantidade_restante -= baixa
                 estoque.save(update_fields=["quantidade_atual", "updated_at"])
+                MovimentacaoEstoque.objects.create(
+                    tipo=MovimentacaoEstoque.Tipo.VENDA_PDV,
+                    produto=produto,
+                    loja_origem=estoque.loja,
+                    quantidade=baixa,
+                    usuario=user,
+                )
                 notificar_estoque_baixo(estoque, usuario_editor=user)
 
         return pedido

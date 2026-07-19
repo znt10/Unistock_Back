@@ -39,21 +39,16 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         f"{estoque.loja.nome_loja}. Atual: {estoque.quantidade_atual}. "
         f"Minimo: {estoque.quantidade_minima}."
     )
-    chave_mensagem = (
-        f"{estoque.produto.nome_produto} esta com estoque baixo na loja "
-        f"{estoque.loja.nome_loja}."
-    )
 
     notificados = []
     for usuario in usuarios:
         # Uma notificacao por episodio de estoque baixo (lida ou nao); quando o
         # estoque recupera, o EstoqueUpdateSerializer apaga as do episodio e um
-        # novo episodio volta a notificar.
+        # novo episodio volta a notificar. Dedup pela FK do estoque.
         ja_existe = Notificacao.objects.filter(
             usuario=usuario,
             tipo="estoque_baixo",
-            titulo=titulo,
-            mensagem__startswith=chave_mensagem,
+            estoque=estoque,
         ).exists()
 
         if ja_existe:
@@ -62,6 +57,7 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         Notificacao.objects.create(
             usuario=usuario,
             loja=estoque.loja,
+            estoque=estoque,
             tipo="estoque_baixo",
             titulo=titulo,
             mensagem=mensagem,

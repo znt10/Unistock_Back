@@ -70,15 +70,11 @@ class EstoqueUpdateSerializer(EstoqueWriteSerializer):
             )
 
         if estoque.quantidade_minima > 0 and estoque.quantidade_atual > estoque.quantidade_minima:
-            chave_mensagem = (
-                f"{estoque.produto.nome_produto} esta com estoque baixo na loja "
-                f"{estoque.loja.nome_loja}."
-            )
             # Fim do episodio de estoque baixo: apaga lidas e nao lidas, para
             # que uma proxima queda gere notificacao nova (dedup por episodio).
             Notificacao.objects.filter(
                 tipo="estoque_baixo",
-                mensagem__startswith=chave_mensagem,
+                estoque=estoque,
             ).delete()
         else:
             notificar_estoque_baixo(

@@ -11,7 +11,7 @@ from django.utils.timezone import make_aware
 from django.contrib.auth.models import User
 from django.db.models import F
 
-from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, Notificacao
+from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque, Notificacao
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
     EstoqueCreateSerializer,
@@ -48,6 +48,13 @@ def somar_itens_no_estoque(pedido):
         )
         estoque.quantidade_atual += item.quantidade
         estoque.save(update_fields=['quantidade_atual', 'updated_at'])
+        MovimentacaoEstoque.objects.create(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA,
+            produto=item.produto,
+            loja_destino=pedido.loja,
+            quantidade=item.quantidade,
+            usuario=pedido.responsavel,
+        )
         notificar_estoque_baixo(estoque)
 
 
@@ -80,14 +87,18 @@ def get_user_group_name(user):
     
 # 🔹 LOJA
 class LojaViewSet(viewsets.ModelViewSet):
-    queryset = Loja.objects.all().order_by('id') 
+    queryset = Loja.objects.all().order_by('id')
     serializer_class = LojaSerializer
     lookup_field = 'public_id'
-    
+
     def get_permissions(self):
         if self.action == 'list':
             return [AllowAny()]
-        return [IsAuthenticated()]
+        if self.action == 'create':
+            # Criar loja e coisa de gerente/admin.
+            return [IsAuthenticated(), IsGerenteOrAdministrador()]
+        # Editar/apagar: gerente/admin, ou o responsavel na propria loja.
+        return [IsAuthenticated(), IsGerenteOrAdministradorOrResponsavel()]
 
 
 # 🔹 ESTOQUE

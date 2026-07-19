@@ -79,7 +79,8 @@ class Pedido(BaseModel):
         ENTREGUE = "ENTREGUE", "Entregue"
         CANCELADO = "CANCELADO", "Cancelado"
 
-    responsavel = models.ForeignKey(User, on_delete=models.CASCADE)
+    # PROTECT: deletar um usuario nao pode apagar o historico de pedidos.
+    responsavel = models.ForeignKey(User, on_delete=models.PROTECT)
 
     loja = models.ForeignKey(
         Loja,
@@ -110,7 +111,7 @@ class ItemPedido(BaseModel):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='itens')
     produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
     quantidade = models.IntegerField()
-    responsavel = models.ForeignKey(User, on_delete=models.CASCADE)
+    responsavel = models.ForeignKey(User, on_delete=models.PROTECT)
     
     def __str__(self):
         return f"{self.quantidade} x {self.produto.nome_produto} (Pedido {self.pedido.id})"
@@ -132,8 +133,56 @@ class Estoque(BaseModel):
         default=EstadoProduto.NORMAL,
     )
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["produto", "loja"], name="estoque_unico_por_produto_loja"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantidade_atual__gte=0),
+                name="estoque_nao_negativo",
+            ),
+        ]
+
     def __str__(self):
         return f"Estoque de {self.produto.nome_produto} na {self.loja.nome_loja}"
+
+
+class MovimentacaoEstoque(BaseModel):
+    """Historico auditavel de toda alteracao de estoque.
+
+    ENTRADA usa loja_destino; SAIDA/VENDA_PDV usam loja_origem; TRANSFERENCIA
+    usa as duas; AJUSTE usa loja_origem com quantidade positiva ou negativa
+    (delta do ajuste manual).
+    """
+
+    class Tipo(models.TextChoices):
+        ENTRADA = "ENTRADA", "Entrada"
+        SAIDA = "SAIDA", "Saída"
+        TRANSFERENCIA = "TRANSFERENCIA", "Transferência"
+        AJUSTE = "AJUSTE", "Ajuste"
+        VENDA_PDV = "VENDA_PDV", "Venda PDV"
+
+    tipo = models.CharField(max_length=20, choices=Tipo.choices)
+    produto = models.ForeignKey(
+        Produto, on_delete=models.PROTECT, related_name="movimentacoes"
+    )
+    loja_origem = models.ForeignKey(
+        Loja, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="movimentacoes_saida",
+    )
+    loja_destino = models.ForeignKey(
+        Loja, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="movimentacoes_entrada",
+    )
+    quantidade = models.IntegerField()
+    usuario = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="movimentacoes_estoque",
+    )
+
+    def __str__(self):
+        return f"{self.tipo} {self.quantidade}x {self.produto.nome_produto}"
 
 
 class Notificacao(BaseModel):

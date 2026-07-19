@@ -35,3 +35,6 @@ weasyprint==66.0
 webencodings==0.5.1
 zopfli==0.4.1
 gunicorn==23.0.0
+celery==5.5.3
+redis==6.4.0
+django-celery-beat==2.9.0

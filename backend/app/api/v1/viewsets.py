@@ -9,9 +9,11 @@ from django.utils.timezone import make_aware
 
 
 from django.contrib.auth.models import User
+from django.core import signing
 from django.db.models import F
 
 from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque, Notificacao
+from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
     EstoqueCreateSerializer,
@@ -390,11 +392,57 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
                 try:
                     loja = Loja.objects.get(public_id=id_loja)
                     # Se o seu model Loja tem o campo 'responsavel':
-                    loja.responsavel = user 
+                    loja.responsavel = user
                     loja.save()
                 except Loja.DoesNotExist:
                     return Response({"error": "Loja não encontrada"}, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
+            # 3. Cadastro publico exige confirmacao por email; conta criada por
+            # admin/gerente ja nasce ativa.
+            if not requester_is_admin:
+                user.is_active = False
+                user.save(update_fields=['is_active'])
+                enviar_email_confirmacao.delay(user.id)
+
+            corpo = dict(serializer.data)
+            corpo['detail'] = (
+                'Conta criada. Enviamos um email de confirmacao — verifique sua caixa de entrada.'
+                if not requester_is_admin else 'Conta criada.'
+            )
+            return Response(corpo, status=status.HTTP_201_CREATED)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path=r'confirmar/(?P<token>[^/]+)',
+        permission_classes=[AllowAny],
+    )
+    def confirmar(self, request, token=None):
+        """GET /api/v1/user/confirmar/<token>/ — ativa a conta do email."""
+        try:
+            user_id = validar_token_confirmacao(token)
+        except signing.SignatureExpired:
+            return Response(
+                {"error": "Link de confirmacao expirado. Cadastre-se novamente."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except signing.BadSignature:
+            return Response(
+                {"error": "Link de confirmacao invalido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response(
+                {"error": "Usuario nao encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not user.is_active:
+            user.is_active = True
+            user.save(update_fields=['is_active'])
+
+        return Response({"detail": "Conta confirmada. Voce ja pode fazer login."})

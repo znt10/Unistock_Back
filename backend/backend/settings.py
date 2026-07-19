@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "drf_spectacular",
+    "django_celery_beat",
     "app",
 ]
 
@@ -181,3 +182,26 @@ BOT_SERVICE_TOKEN = os.getenv("BOT_SERVICE_TOKEN", "")
 # Numero de WhatsApp do gerente. Recebe aviso de cada pedido novo e pode pedir
 # o PDF de TODAS as lojas. Vazio = sem gerente (sem aviso; relatorio so por loja).
 GERENTE_WHATSAPP = os.getenv("GERENTE_WHATSAPP", "")
+
+# ─── Celery / Redis ───────────────────────────────────────────────────────────
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# Nos testes as tasks rodam sincronas, sem broker.
+CELERY_TASK_ALWAYS_EAGER = "test" in sys.argv
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# ─── Email ────────────────────────────────────────────────────────────────────
+# Em DEBUG os emails vao para o console; em producao, SMTP via env.
+if DEBUG:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Unistock <no-reply@unistock.local>")
+
+# URL do front, usada para montar links em emails (confirmacao de conta).
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")

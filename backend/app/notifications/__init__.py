@@ -44,6 +44,7 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         f"{estoque.loja.nome_loja}."
     )
 
+    notificados = []
     for usuario in usuarios:
         # Uma notificacao por episodio de estoque baixo (lida ou nao); quando o
         # estoque recupera, o EstoqueUpdateSerializer apaga as do episodio e um
@@ -65,6 +66,13 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
             titulo=titulo,
             mensagem=mensagem,
         )
+        notificados.append(usuario.id)
+
+    if notificados:
+        # Email assincrono via Celery, so para quem ganhou notificacao nova.
+        from app.notifications.tasks import enviar_alerta_estoque_baixo
+
+        enviar_alerta_estoque_baixo.delay(estoque.id, notificados)
 
 
 def notificar_estoques_baixos_do_pedido(

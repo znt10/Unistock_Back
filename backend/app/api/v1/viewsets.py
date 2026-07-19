@@ -99,7 +99,8 @@ class LojaViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'list':
-            return [AllowAny()]
+            # Dados de loja (endereco, responsavel) nao sao publicos.
+            return [IsAuthenticated()]
         if self.action == 'create':
             # Criar loja e coisa de gerente/admin.
             return [IsAuthenticated(), IsGerenteOrAdministrador()]
@@ -168,7 +169,8 @@ class ProdutoViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'list':
-            return [AllowAny()]
+            # Catalogo interno; leitura exige login.
+            return [IsAuthenticated()]
         return [IsAuthenticated(), IsGerenteOrAdministrador()]
 
 

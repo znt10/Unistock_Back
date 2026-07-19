@@ -212,6 +212,9 @@ class Notificacao(BaseModel):
     usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notificacoes')
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, null=True, blank=True, related_name='notificacoes')
     loja = models.ForeignKey(Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='notificacoes')
+    # Alertas de estoque baixo apontam para o Estoque: dedup/limpeza por FK,
+    # nao por comparacao de texto da mensagem.
+    estoque = models.ForeignKey(Estoque, on_delete=models.CASCADE, null=True, blank=True, related_name='notificacoes')
     tipo = models.CharField(max_length=50, default='info')
     titulo = models.CharField(max_length=120)
     mensagem = models.TextField()

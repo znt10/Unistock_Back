@@ -12,7 +12,10 @@ from django.contrib.auth.models import User
 from django.core import signing
 from django.db.models import F
 
-from app.models import Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque, Notificacao
+from app.models import (
+    Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque,
+    Notificacao, PreferenciaNotificacao,
+)
 from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
@@ -21,6 +24,7 @@ from .serializers import (
     PedidoCreateSerializer,
     PedidoUpdateSerializer,
     ItemPedidoSerializer,
+    PreferenciaNotificacaoSerializer,
     ProdutoSerializer,
     UsuarioSerializer,
     LojaSerializer,
@@ -321,6 +325,27 @@ class VendaViewSet(viewsets.GenericViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+# 🔹 PREFERENCIAS DE NOTIFICACAO
+class PreferenciaNotificacaoViewSet(viewsets.GenericViewSet):
+    """GET/PATCH /api/v1/preferencias-notificacao/me/ — sempre do proprio usuario."""
+
+    serializer_class = PreferenciaNotificacaoSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = PreferenciaNotificacao.objects.none()  # rota so via action `me`
+
+    @action(detail=False, methods=['get', 'patch'], url_path='me')
+    def me(self, request):
+        prefs, _ = PreferenciaNotificacao.objects.get_or_create(usuario=request.user)
+
+        if request.method.lower() == 'patch':
+            serializer = self.get_serializer(prefs, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(self.get_serializer(prefs).data)
+
 
 # 🔹 USUÁRIO
 class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):

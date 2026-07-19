@@ -415,3 +415,57 @@ class NotificacaoAssincronaTests(APITestCase):
         notificar_estoque_baixo(estoque)
         self.assertEqual(len(mail.outbox), 1)
 
+
+class PreferenciaNotificacaoTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='pref@email.com', email='pref@email.com', password='123456',
+        )
+        self.client.force_authenticate(self.user)
+
+    def test_get_cria_preferencia_com_defaults(self):
+        response = self.client.get('/api/v1/preferencias-notificacao/me/')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['email_ativo'])
+        self.assertFalse(response.data['digest_ativo'])
+        self.assertEqual(response.data['digest_dias_semana'], '1,2,3,4,5')
+
+    def test_patch_atualiza_preferencia(self):
+        response = self.client.patch(
+            '/api/v1/preferencias-notificacao/me/',
+            {'digest_ativo': True, 'digest_horario': '08:30',
+             'digest_dias_semana': '1,3,5', 'telefone_whatsapp': '+55 (83) 9999-0000'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data['digest_ativo'])
+        self.assertEqual(response.data['digest_dias_semana'], '1,3,5')
+        self.assertEqual(response.data['telefone_whatsapp'], '558399990000')
+
+    def test_dias_invalidos_400(self):
+        response = self.client.patch(
+            '/api/v1/preferencias-notificacao/me/',
+            {'digest_dias_semana': '1,8'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_email_desativado_nao_envia_alerta(self):
+        from app.models import PreferenciaNotificacao
+
+        PreferenciaNotificacao.objects.create(usuario=self.user, email_ativo=False)
+        loja = Loja.objects.create(
+            nome_loja='Loja Pref', cidade='Patos', endereco='Rua 1',
+            responsavel=self.user,
+        )
+        produto = Produto.objects.create(nome_produto='Cafe', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=5,
+        )
+
+        notificar_estoque_baixo(estoque)
+
+        # Notificacao no sino continua; email nao sai.
+        self.assertEqual(Notificacao.objects.filter(usuario=self.user).count(), 1)
+        self.assertEqual(len(mail.outbox), 0)
+

@@ -19,6 +19,7 @@ from .pedidos import (
     PedidoUpdateSerializer,
     PedidoWriteSerializer,
 )
+from .preferencias import PreferenciaNotificacaoSerializer
 from .produtos import ProdutoSerializer
 from .usuarios import UsuarioSerializer
 from .vendas import VendaCreateSerializer, VendaItemSerializer
@@ -35,6 +36,7 @@ __all__ = [
     "PedidoSerializer",
     "PedidoUpdateSerializer",
     "PedidoWriteSerializer",
+    "PreferenciaNotificacaoSerializer",
     "ProdutoSerializer",
     "UsuarioSerializer",
     "VendaCreateSerializer",

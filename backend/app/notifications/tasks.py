@@ -40,6 +40,77 @@ def enviar_email_confirmacao(user_id):
 
 
 @shared_task
+def disparar_digests():
+    """Roda no beat (a cada 15 min): dispara o digest de quem esta na hora.
+
+    Envia quando: digest ativo, dia da semana marcado, horario escolhido ja
+    passou e ainda nao houve digest hoje (ultimo_digest_em). Assim nao duplica
+    no mesmo dia e recupera atraso se o beat ficar um tempo fora.
+    """
+    from django.utils import timezone as dj_tz
+
+    from app.models import PreferenciaNotificacao
+
+    agora = dj_tz.localtime(dj_tz.now())
+    hoje = agora.date()
+    dia_iso = str(agora.isoweekday())  # 1=segunda ... 7=domingo
+
+    pendentes = PreferenciaNotificacao.objects.filter(
+        digest_ativo=True,
+        digest_horario__lte=agora.time(),
+    ).exclude(ultimo_digest_em=hoje)
+
+    disparados = 0
+    for prefs in pendentes:
+        if dia_iso not in prefs.digest_dias_semana.split(","):
+            continue
+        prefs.ultimo_digest_em = hoje
+        prefs.save(update_fields=["ultimo_digest_em", "updated_at"])
+        enviar_digest.delay(prefs.usuario_id)
+        disparados += 1
+    return disparados
+
+
+@shared_task
+def enviar_digest(user_id):
+    """Um email com os produtos abaixo do minimo nas lojas do usuario."""
+    from django.db.models import F
+
+    from app.models import Estoque
+
+    usuario = User.objects.filter(id=user_id).first()
+    if not usuario:
+        return False
+
+    baixos = (
+        Estoque.objects.filter(
+            loja__responsavel=usuario,
+            loja__ativo=True,
+            quantidade_minima__gt=0,
+            quantidade_atual__lte=F("quantidade_minima"),
+        )
+        .select_related("produto", "loja")
+        .order_by("loja__nome_loja", "produto__nome_produto")
+    )
+    if not baixos:
+        return False  # nada baixo, nada de email
+
+    linhas = [
+        f"- {e.produto.nome_produto} ({e.loja.nome_loja}): "
+        f"{e.quantidade_atual} em estoque, minimo {e.quantidade_minima}"
+        for e in baixos
+    ]
+    nome = usuario.first_name or usuario.username
+    mensagem = (
+        f"Ola, {nome}!\n\n"
+        "Resumo do dia — produtos abaixo do estoque minimo:\n\n"
+        + "\n".join(linhas)
+        + "\n\nAcesse o Unistock para repor."
+    )
+    return despachar(usuario, "Resumo diario de estoque — Unistock", mensagem) > 0
+
+
+@shared_task
 def enviar_alerta_estoque_baixo(estoque_id, usuario_ids):
     from app.models import Estoque
 

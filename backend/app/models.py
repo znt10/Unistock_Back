@@ -203,6 +203,9 @@ class PreferenciaNotificacao(BaseModel):
     digest_horario = models.TimeField(default=datetime.time(18, 0))
     # Dias ISO separados por virgula: 1=segunda ... 7=domingo
     digest_dias_semana = models.CharField(max_length=20, default="1,2,3,4,5")
+    # Idempotencia: garante no maximo 1 digest por dia, mesmo com o beat
+    # rodando a cada 15 min (e recupera atraso se o beat ficar fora do ar).
+    ultimo_digest_em = models.DateField(null=True, blank=True)
 
     def __str__(self):
         return f"Preferencias de {self.usuario.username}"

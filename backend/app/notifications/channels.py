@@ -39,9 +39,15 @@ class WhatsAppChannel(NotificationChannel):
 
 
 def canais_do_usuario(usuario):
-    # ponytail: email para todos por enquanto; trocar pela leitura de
-    # PreferenciaNotificacao (email_ativo/whatsapp_ativo) quando o model existir.
-    return [EmailChannel()]
+    from app.models import PreferenciaNotificacao
+
+    prefs, _ = PreferenciaNotificacao.objects.get_or_create(usuario=usuario)
+    canais = []
+    if prefs.email_ativo:
+        canais.append(EmailChannel())
+    if prefs.whatsapp_ativo:
+        canais.append(WhatsAppChannel())
+    return canais
 
 
 def despachar(usuario, titulo, mensagem, contexto=None):

@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 from django.db import models
@@ -183,6 +184,28 @@ class MovimentacaoEstoque(BaseModel):
 
     def __str__(self):
         return f"{self.tipo} {self.quantidade}x {self.produto.nome_produto}"
+
+
+class PreferenciaNotificacao(BaseModel):
+    """Preferencias de notificacao do usuario (canais e resumo diario).
+
+    Criada sob demanda (get_or_create) na primeira leitura — nao precisa de
+    signal no cadastro.
+    """
+
+    usuario = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="preferencia_notificacao"
+    )
+    email_ativo = models.BooleanField(default=True)
+    whatsapp_ativo = models.BooleanField(default=False)
+    telefone_whatsapp = models.CharField(max_length=20, blank=True, default="")
+    digest_ativo = models.BooleanField(default=False)
+    digest_horario = models.TimeField(default=datetime.time(18, 0))
+    # Dias ISO separados por virgula: 1=segunda ... 7=domingo
+    digest_dias_semana = models.CharField(max_length=20, default="1,2,3,4,5")
+
+    def __str__(self):
+        return f"Preferencias de {self.usuario.username}"
 
 
 class Notificacao(BaseModel):

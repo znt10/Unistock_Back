@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .bot import BotCatalogoView, BotContatoView, BotPedidoConfirmarView, BotPedidoView, BotRelatorioView
-from .viewsets import EstoqueViewSet, LojaViewSet, PedidoViewSet, ItemPedidoViewSet, ProdutoViewSet, UsuarioViewSet, NotificacaoViewSet, VendaViewSet
+from .viewsets import EstoqueViewSet, LojaViewSet, PedidoViewSet, ItemPedidoViewSet, PreferenciaNotificacaoViewSet, ProdutoViewSet, UsuarioViewSet, NotificacaoViewSet, VendaViewSet
 
 router = DefaultRouter()
 router.register(r'pedidos', PedidoViewSet)
@@ -12,6 +12,7 @@ router.register(r'estoque', EstoqueViewSet)
 router.register(r'vendas', VendaViewSet, basename='vendas')
 router.register(r'user', UsuarioViewSet)
 router.register(r'notificacoes', NotificacaoViewSet, basename='notificacoes')
+router.register(r'preferencias-notificacao', PreferenciaNotificacaoViewSet, basename='preferencias-notificacao')
 
 urlpatterns = router.urls + [
     path('bot/contato/', BotContatoView.as_view(), name='bot-contato'),

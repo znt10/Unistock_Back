@@ -1,9 +1,9 @@
-"""Autorizacao dos endpoints sensiveis (relatorio PDF e listas)."""
+"""Autorizacao dos endpoints sensiveis (relatorio PDF, listas, movimentacoes)."""
 
 from django.contrib.auth.models import Group, User
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, Loja, Notificacao, Produto
+from app.models import Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
 from app.notifications import notificar_estoque_baixo
 
 try:
@@ -83,6 +83,41 @@ class NotificacaoPorFkTests(APITestCase):
         notifs = Notificacao.objects.filter(tipo='estoque_baixo')
         self.assertEqual(notifs.count(), 1)
         self.assertEqual(notifs.first().estoque, self.estoque)
+
+    def test_movimentacoes_escopo_por_loja(self):
+        """Responsavel ve so movimentos das lojas dele; gerente ve tudo."""
+        outro = User.objects.create_user(username='outro@email.com', password='123')
+        outra_loja = Loja.objects.create(
+            nome_loja='Loja Outra', cidade='Patos', endereco='Rua 2',
+            responsavel=outro,
+        )
+        minha = MovimentacaoEstoque.objects.create(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA, produto=self.produto,
+            loja_destino=self.loja, quantidade=5, usuario=self.user,
+        )
+        MovimentacaoEstoque.objects.create(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA, produto=self.produto,
+            loja_destino=outra_loja, quantidade=7, usuario=outro,
+        )
+
+        # Sem login nega
+        response = self.client.get('/api/v1/movimentacoes/')
+        self.assertIn(response.status_code, (401, 403))
+
+        # Responsavel: so a propria loja
+        self.client.force_authenticate(self.user)
+        response = self.client.get('/api/v1/movimentacoes/')
+        self.assertEqual(response.status_code, 200)
+        ids = [m['id'] for m in response.data['results']]
+        self.assertEqual(ids, [str(minha.public_id)])
+
+        # Gerente: todas
+        gerente = User.objects.create_user(username='g@email.com', password='123')
+        grupo, _ = Group.objects.get_or_create(name='Gerente')
+        gerente.groups.add(grupo)
+        self.client.force_authenticate(gerente)
+        response = self.client.get('/api/v1/movimentacoes/')
+        self.assertEqual(len(response.data['results']), 2)
 
     def test_renomear_produto_nao_quebra_dedup(self):
         notificar_estoque_baixo(self.estoque)

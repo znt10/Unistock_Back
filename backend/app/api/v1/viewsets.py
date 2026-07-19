@@ -10,7 +10,7 @@ from django.utils.timezone import make_aware
 
 from django.contrib.auth.models import User
 from django.core import signing
-from django.db.models import F
+from django.db.models import F, Q
 
 from app.models import (
     Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque,
@@ -24,6 +24,7 @@ from .serializers import (
     PedidoCreateSerializer,
     PedidoUpdateSerializer,
     ItemPedidoSerializer,
+    MovimentacaoEstoqueSerializer,
     PreferenciaNotificacaoSerializer,
     ProdutoSerializer,
     UsuarioSerializer,
@@ -159,6 +160,31 @@ class EstoqueViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         self._validar_loja_do_responsavel(self.request.user, instance.loja)
         instance.delete()
+
+
+# 🔹 MOVIMENTACAO DE ESTOQUE (historico auditavel, somente leitura)
+class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = MovimentacaoEstoqueSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'public_id'
+    queryset = MovimentacaoEstoque.objects.none()  # so via get_queryset
+
+    def get_queryset(self):
+        qs = (
+            MovimentacaoEstoque.objects
+            .select_related('produto', 'loja_origem', 'loja_destino', 'usuario')
+            .order_by('-created_at')
+        )
+
+        user = self.request.user
+        if not is_gerente_ou_admin(user):
+            minhas = Loja.objects.filter(responsavel=user)
+            qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
+
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            qs = qs.filter(tipo=tipo)
+        return qs
 
 
 # 🔹 PRODUTO

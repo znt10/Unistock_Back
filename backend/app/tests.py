@@ -1,7 +1,8 @@
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.contrib.auth.models import User, Group,Permission
 from django.contrib.contenttypes.models import ContentType
-from app.models import Loja, Produto, Pedido, ItemPedido, Estoque, Notificacao
+from app.models import Loja, MovimentacaoEstoque, Produto, Pedido, ItemPedido, Estoque, Notificacao
 from app.notifications import notificar_estoque_baixo
 from rest_framework.test import APITestCase
 from rest_framework.test import APIClient
@@ -119,6 +120,7 @@ class PedidoAPITestCase(APITestCase):
 
         loja_data = {
             "nome_loja": "Loja Gerente",
+            "cidade": "Patos",
             "endereco": "Rua 1",
             "responsavel": self.gerente.id
         }
@@ -132,11 +134,10 @@ class PedidoAPITestCase(APITestCase):
         url = "/api/v1/pedidos/"
 
         data = {
-            "loja": self.loja.id,
-            "status": "novo",
+            "loja": str(self.loja.public_id),
             "itens": [
                 {
-                    "produto": self.produto.id,
+                    "produto": str(self.produto.public_id),
                     "quantidade": 2
                 }
             ]
@@ -268,4 +269,89 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             ).count(),
             1,
         )
+
+
+class EstoqueIntegridadeTests(APITestCase):
+    """Constraints do Estoque e historico de MovimentacaoEstoque."""
+
+    def setUp(self):
+        self.grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.user = User.objects.create_user(username='resp', password='123')
+        self.gerente = User.objects.create_user(username='ger', password='123')
+        self.gerente.groups.add(self.grupo_gerente)
+
+        self.loja = Loja.objects.create(
+            nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
+            responsavel=self.user,
+        )
+        self.produto = Produto.objects.create(
+            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+        )
+        self.estoque = Estoque.objects.create(
+            loja=self.loja, produto=self.produto,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+
+    def test_nao_permite_estoque_duplicado_para_produto_e_loja(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Estoque.objects.create(
+                loja=self.loja, produto=self.produto,
+                quantidade_atual=5, quantidade_minima=1,
+            )
+
+    def test_nao_permite_estoque_negativo(self):
+        outro = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Estoque.objects.create(
+                loja=self.loja, produto=outro,
+                quantidade_atual=-1, quantidade_minima=0,
+            )
+
+    def test_entrega_de_pedido_registra_movimentacao_entrada(self):
+        from app.api.v1.viewsets import somar_itens_no_estoque
+
+        pedido = Pedido.objects.create(responsavel=self.user, loja=self.loja)
+        ItemPedido.objects.create(
+            pedido=pedido, produto=self.produto, quantidade=4, responsavel=self.user,
+        )
+        somar_itens_no_estoque(pedido)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.ENTRADA)
+        self.assertEqual(mov.loja_destino, self.loja)
+        self.assertEqual(mov.produto, self.produto)
+        self.assertEqual(mov.quantidade, 4)
+        self.assertEqual(mov.usuario, self.user)
+
+    def test_venda_pdv_registra_movimentacao_saida(self):
+        self.client.force_authenticate(self.gerente)
+        response = self.client.post(
+            '/api/v1/vendas/',
+            {
+                'loja_id': str(self.loja.public_id),
+                'itens': [{'produto_id': str(self.produto.public_id), 'quantidade': 3}],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.VENDA_PDV)
+        self.assertEqual(mov.loja_origem, self.loja)
+        self.assertEqual(mov.quantidade, 3)
+        self.assertEqual(mov.usuario, self.gerente)
+        self.estoque.refresh_from_db()
+        self.assertEqual(self.estoque.quantidade_atual, 7)
+
+    def test_ajuste_manual_registra_delta(self):
+        self.client.force_authenticate(self.gerente)
+        response = self.client.patch(
+            f'/api/v1/estoque/{self.estoque.public_id}/',
+            {'quantidade_atual': 6},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.AJUSTE)
+        self.assertEqual(mov.quantidade, -4)  # 10 -> 6
+        self.assertEqual(mov.loja_origem, self.loja)
+        self.assertEqual(mov.usuario, self.gerente)
 

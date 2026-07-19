@@ -45,12 +45,14 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
     )
 
     for usuario in usuarios:
+        # Uma notificacao por episodio de estoque baixo (lida ou nao); quando o
+        # estoque recupera, o EstoqueUpdateSerializer apaga as do episodio e um
+        # novo episodio volta a notificar.
         ja_existe = Notificacao.objects.filter(
             usuario=usuario,
             tipo="estoque_baixo",
             titulo=titulo,
             mensagem__startswith=chave_mensagem,
-            lida=False,
         ).exists()
 
         if ja_existe:

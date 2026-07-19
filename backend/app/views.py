@@ -100,6 +100,13 @@ class LoginView(APIView):
         user = authenticate(username=email, password=password)
 
         if not user:
+            # Senha certa mas conta inativa = falta confirmar o email.
+            pendente = User.objects.filter(username=email, is_active=False).first()
+            if pendente and pendente.check_password(password):
+                return Response(
+                    {"error": "Conta ainda nao confirmada. Verifique o link enviado por email."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return Response(
                 {"error": "Credenciais invalidas"},
                 status=status.HTTP_401_UNAUTHORIZED,

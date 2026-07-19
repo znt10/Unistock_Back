@@ -16,6 +16,13 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: unistock_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   api:
     build: .
     container_name: unistock
@@ -23,6 +30,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - .:/app
     ports:
@@ -31,6 +40,45 @@ services:
       - .env
     environment:
       DB_HOST: db
+      CELERY_BROKER_URL: redis://redis:6379/0
+
+  worker:
+    build: .
+    container_name: unistock_worker
+    restart: on-failure
+    entrypoint: []
+    command: celery -A backend worker -l info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      CELERY_BROKER_URL: redis://redis:6379/0
+
+  beat:
+    build: .
+    container_name: unistock_beat
+    restart: on-failure
+    entrypoint: []
+    command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      CELERY_BROKER_URL: redis://redis:6379/0
 
 volumes:
   mysql_data:

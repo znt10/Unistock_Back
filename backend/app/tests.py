@@ -1,3 +1,6 @@
+import re
+
+from django.core import mail
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.contrib.auth.models import User, Group,Permission
@@ -54,27 +57,30 @@ class PedidoAPITestCase(APITestCase):
 
 
     def test_registro_e_login(self):
-
-        self.client.post("/login/", {
-            "email": "admin",
-            "password": "123"
-            })
-        
-    # registra
+        # registra (conta nasce inativa; email de confirmacao no outbox)
         self.client.post("/api/v1/user/registrar/", {
             "email": "novo@email.com",
             "password": "123456",
             "tipo_usuario": "responsavel"
         })
 
+        # antes de confirmar, login e recusado com mensagem clara
+        response = self.client.post("/login/", {
+            "email": "novo@email.com",
+            "password": "123456"
+        })
+        self.assertEqual(response.status_code, 403)
 
-        self.client.post("/logout/")
+        # confirma pelo link do email
+        token = re.search(r"/confirmar-conta/(\S+)", mail.outbox[-1].body).group(1)
+        response = self.client.get(f"/api/v1/user/confirmar/{token}/")
+        self.assertEqual(response.status_code, 200)
+
         # login
         response = self.client.post("/login/", {
             "email": "novo@email.com",
             "password": "123456"
         })
-
         self.assertEqual(response.status_code, 200)
 
 
@@ -354,4 +360,58 @@ class EstoqueIntegridadeTests(APITestCase):
         self.assertEqual(mov.quantidade, -4)  # 10 -> 6
         self.assertEqual(mov.loja_origem, self.loja)
         self.assertEqual(mov.usuario, self.gerente)
+
+
+class NotificacaoAssincronaTests(APITestCase):
+    """Confirmacao de conta por email e alerta assincrono de estoque baixo.
+
+    CELERY_TASK_ALWAYS_EAGER esta ativo em testes: .delay() roda na hora e o
+    email cai em django.core.mail.outbox.
+    """
+
+    def setUp(self):
+        Group.objects.get_or_create(name='Responsavel')
+        Group.objects.get_or_create(name='Gerente')
+
+    def test_registro_publico_cria_conta_inativa_e_envia_email(self):
+        response = self.client.post("/api/v1/user/registrar/", {
+            "email": "ana@email.com",
+            "password": "123456",
+            "tipo_usuario": "responsavel",
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+
+        user = User.objects.get(username="ana@email.com")
+        self.assertFalse(user.is_active)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("/confirmar-conta/", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].to, ["ana@email.com"])
+
+    def test_token_invalido_400(self):
+        response = self.client.get("/api/v1/user/confirmar/token-falso/")
+        self.assertEqual(response.status_code, 400)
+
+    def test_alerta_estoque_baixo_envia_email_ao_responsavel(self):
+        responsavel = User.objects.create_user(
+            username='resp@email.com', email='resp@email.com', password='123456',
+        )
+        loja = Loja.objects.create(
+            nome_loja='Loja Email', cidade='Patos', endereco='Rua 1',
+            responsavel=responsavel,
+        )
+        produto = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto,
+            quantidade_atual=1, quantidade_minima=5,
+        )
+
+        notificar_estoque_baixo(estoque)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['resp@email.com'])
+        self.assertIn('Coca', mail.outbox[0].body)
+
+        # Mesmo episodio nao reenvia email
+        notificar_estoque_baixo(estoque)
+        self.assertEqual(len(mail.outbox), 1)
 

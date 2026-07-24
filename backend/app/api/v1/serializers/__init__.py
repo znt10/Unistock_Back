@@ -11,6 +11,7 @@ from .estoque import (
     EstoqueWriteSerializer,
 )
 from .lojas import LojaSerializer
+from .movimentacoes import MovimentacaoEstoqueSerializer
 from .notificacoes import NotificacaoSerializer
 from .pedidos import (
     ItemPedidoSerializer,
@@ -31,6 +32,7 @@ __all__ = [
     "EstoqueWriteSerializer",
     "ItemPedidoSerializer",
     "LojaSerializer",
+    "MovimentacaoEstoqueSerializer",
     "NotificacaoSerializer",
     "PedidoCreateSerializer",
     "PedidoSerializer",

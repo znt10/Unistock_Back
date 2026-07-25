@@ -1,19 +1,27 @@
 """Tokens assinados para definir senha (1o acesso e 'esqueci a senha').
 
-Uso unico: o payload carrega um trecho do hash da senha atual. Ao definir a
-senha o hash muda, entao o link para de funcionar — um link vazado nao continua
+Uso unico: o payload carrega uma marca derivada da senha atual. Ao definir a
+senha a marca muda, entao o link para de funcionar — um link vazado nao continua
 valido pelos 3 dias.
 """
 
 from django.core import signing
+from django.utils.crypto import salted_hmac
 
 SALT_SENHA = "unistock-definir-senha"
 VALIDADE_TOKEN_SEGUNDOS = 60 * 60 * 24 * 3  # 3 dias
 
 
 def _marca_da_senha(usuario):
-    """Trecho do hash atual da senha. Muda quando a senha muda."""
-    return (usuario.password or "")[-12:]
+    """Marca derivada da senha atual, para invalidar o token quando ela muda.
+
+    HMAC em vez de um pedaco do hash: o payload do token e assinado mas NAO e
+    criptografado (base64 legivel), entao nao pode carregar material do hash da
+    senha. Mesma ideia do PasswordResetTokenGenerator do Django.
+    """
+    return salted_hmac(
+        "unistock-marca-senha", usuario.password or ""
+    ).hexdigest()[:12]
 
 
 def gerar_token_senha(usuario):

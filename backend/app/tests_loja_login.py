@@ -36,3 +36,36 @@ class TokenSenhaTests(TestCase):
 
         with self.assertRaises(signing.BadSignature):
             validar_token_senha(token)
+
+    def test_funciona_para_conta_sem_senha_utilizavel(self):
+        """Caminho principal: a loja nasce sem senha e define no 1o acesso."""
+        from app.notifications.tokens import gerar_token_senha, validar_token_senha
+
+        loja = User.objects.create(username='lapa@unistock.com')
+        loja.set_unusable_password()
+        loja.save()
+
+        token = gerar_token_senha(loja)
+
+        self.assertEqual(validar_token_senha(token), loja.id)
+
+        # Depois de definir a senha, o mesmo link nao serve mais.
+        loja.set_password('SenhaForte#2026')
+        loja.save()
+        with self.assertRaises(signing.BadSignature):
+            validar_token_senha(token)
+
+    def test_token_expira_depois_de_3_dias(self):
+        from unittest.mock import patch
+
+        from app.notifications.tokens import gerar_token_senha, validar_token_senha
+
+        token = gerar_token_senha(self.user)
+
+        # Avanca o relogio do signing para 3 dias e 1 minuto no futuro.
+        import time as _time
+
+        futuro = _time.time() + 60 * 60 * 24 * 3 + 60
+        with patch('django.core.signing.time.time', return_value=futuro):
+            with self.assertRaises(signing.SignatureExpired):
+                validar_token_senha(token)

@@ -277,6 +277,33 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             ).exists()
         )
 
+    def test_atualiza_mensagem_quando_estoque_muda_e_segue_baixo(self):
+        """Sem spam, mas sem mentir: mesma notificacao, numeros atuais."""
+        usuario = User.objects.create_user(
+            username='atualiza@email.com', email='a@email.com', password='123456',
+        )
+        loja = Loja.objects.create(
+            nome_loja='Loja Muda', cidade='Patos', endereco='Rua 3',
+            responsavel=usuario,
+        )
+        produto = Produto.objects.create(nome_produto='Coxinho', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto, quantidade_atual=1, quantidade_minima=3,
+        )
+        notificar_estoque_baixo(estoque)
+
+        # Continua baixo, mas mudou de 1 para 2.
+        estoque.quantidade_atual = 2
+        estoque.save()
+        notificar_estoque_baixo(estoque)
+
+        notificacoes = Notificacao.objects.filter(
+            usuario=usuario, tipo='estoque_baixo', estoque=estoque
+        )
+        self.assertEqual(notificacoes.count(), 1)  # sem duplicar
+        self.assertIn('Atual: 2', notificacoes.first().mensagem)
+        self.assertNotIn('Atual: 1', notificacoes.first().mensagem)
+
     def test_nao_duplica_notificacao_do_mesmo_estoque(self):
         usuario = User.objects.create_user(
             username='loja',

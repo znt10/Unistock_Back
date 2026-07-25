@@ -212,3 +212,48 @@ class CriarLojaCriaAcessoTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertIn('email_acesso', response.data)
         self.assertIsNone(response.data['email_acesso'])
+
+
+class TrocarEmailDaLojaTests(APITestCase):
+    def setUp(self):
+        Group.objects.get_or_create(name='Responsavel')
+        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.gerente = User.objects.create_user(username='ger2', password='123')
+        self.gerente.groups.add(grupo_gerente)
+        self.client.force_authenticate(self.gerente)
+        self.client.post('/api/v1/lojas/', {
+            'nome_loja': 'Lapa', 'cidade': 'Patos', 'endereco': 'Rua 1',
+            'email': 'antigo@unistock.com',
+        }, format='json')
+        self.loja = Loja.objects.get(nome_loja='Lapa')
+
+    def test_login_acompanha_o_novo_email(self):
+        response = self.client.patch(
+            f'/api/v1/lojas/{self.loja.public_id}/',
+            {'email': 'novo@unistock.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.loja.refresh_from_db()
+        acesso = self.loja.responsavel
+        acesso.refresh_from_db()
+        self.assertEqual(acesso.username, 'novo@unistock.com')
+        self.assertEqual(acesso.email, 'novo@unistock.com')
+
+    def test_loja_que_ganha_email_depois_ganha_acesso(self):
+        loja_sem = Loja.objects.create(
+            nome_loja='Sem Email', cidade='Patos', endereco='Rua 2',
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.patch(
+                f'/api/v1/lojas/{loja_sem.public_id}/',
+                {'email': 'depois@unistock.com'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        loja_sem.refresh_from_db()
+        self.assertIsNotNone(loja_sem.responsavel)
+        self.assertEqual(loja_sem.responsavel.username, 'depois@unistock.com')

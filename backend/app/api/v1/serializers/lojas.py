@@ -115,3 +115,23 @@ class LojaSerializer(serializers.ModelSerializer):
         loja = super().create(validated_data)
         criar_acesso_da_loja(loja)
         return loja
+
+    def update(self, instance, validated_data):
+        email_anterior = instance.email
+        loja = super().update(instance, validated_data)
+
+        if loja.email == email_anterior:
+            return loja
+
+        if loja.responsavel_id:
+            # O login E o email da loja: se um muda, o outro acompanha, senao a
+            # loja perde o acesso na primeira edicao de cadastro.
+            acesso = loja.responsavel
+            acesso.username = loja.email
+            acesso.email = loja.email
+            acesso.save(update_fields=["username", "email"])
+        else:
+            # Loja que nao tinha email agora tem: ganha acesso.
+            criar_acesso_da_loja(loja)
+
+        return loja

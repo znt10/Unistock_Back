@@ -18,7 +18,11 @@ from app.models import (
     Pedido, ItemPedido, Produto, Loja, Estoque, MovimentacaoEstoque,
     Notificacao, PreferenciaNotificacao,
 )
-from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
+from app.notifications.tasks import (
+    enviar_email_confirmacao,
+    enviar_email_definir_senha,
+    validar_token_confirmacao,
+)
 from app.notifications.tokens import validar_token_senha
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
@@ -77,6 +81,12 @@ class RegistroRateThrottle(AnonRateThrottle):
     """
 
     scope = "registro"
+
+
+class SenhaRateThrottle(AnonRateThrottle):
+    """Limita o pedido de link de senha: evita varredura de emails."""
+
+    scope = "senha"
 
 
 # 🔹 Helper
@@ -562,3 +572,37 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
         user.is_active = True
         user.save(update_fields=['password', 'is_active'])
         return Response({"detail": "Senha definida. Voce ja pode entrar."})
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='esqueci-senha',
+        permission_classes=[AllowAny],
+        throttle_classes=[SenhaRateThrottle],
+    )
+    def esqueci_senha(self, request):
+        """POST /api/v1/user/esqueci-senha/ — manda o link de definir senha.
+
+        Responde 200 exista ou nao o email: responder 404 revelaria quais
+        emails estao cadastrados.
+        """
+        email = request.data.get('email')
+        if email is not None and not isinstance(email, str):
+            # JSON aceita numero/lista/objeto; .strip() estouraria 500 aqui.
+            return Response(
+                {"email": ["Informe o e-mail como texto."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if email:
+            user = User.objects.filter(email__iexact=email.strip()).first()
+            # Conta inativa que nunca definiu senha e uma loja recem-criada cujo
+            # link expirou: sem isso ela ficaria travada, sem como pedir outro.
+            # Ja uma conta desativada de proposito tem senha utilizavel, entao
+            # continua bloqueada.
+            if user and (user.is_active or not user.has_usable_password()):
+                enviar_email_definir_senha.delay(user.id)
+
+        return Response(
+            {"detail": "Se este email estiver cadastrado, enviamos o link."}
+        )

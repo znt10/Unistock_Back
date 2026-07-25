@@ -163,6 +163,7 @@ REST_FRAMEWORK = {
         "user": "300/min",
         "login": "10/min",
         "registro": "20/hour",
+        "senha": "10/hour",
     },
 }
 

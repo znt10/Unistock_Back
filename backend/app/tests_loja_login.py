@@ -384,3 +384,85 @@ class DefinirSenhaTests(APITestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('expirado', str(response.data).lower())
+
+
+class EsqueciSenhaTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='lapa@unistock.com', email='lapa@unistock.com',
+            password='qualquer-123',
+        )
+
+    def test_email_existente_recebe_link(self):
+        from django.core import mail
+
+        response = self.client.post(
+            '/api/v1/user/esqueci-senha/',
+            {'email': 'lapa@unistock.com'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['lapa@unistock.com'])
+
+    def test_email_inexistente_responde_igual_sem_enviar(self):
+        """Nao vazar quais emails estao cadastrados."""
+        from django.core import mail
+
+        response = self.client.post(
+            '/api/v1/user/esqueci-senha/',
+            {'email': 'naoexiste@unistock.com'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_loja_provisionada_com_link_expirado_consegue_pedir_outro(self):
+        """Conta inativa que nunca definiu senha e loja recem-criada.
+
+        So filtrar is_active deixaria ela travada pra sempre: o link de 3 dias
+        expirou e ela nao teria como pedir outro.
+        """
+        from django.core import mail
+
+        nova = User.objects.create(
+            username='nova@unistock.com', email='nova@unistock.com',
+            is_active=False,
+        )
+        nova.set_unusable_password()
+        nova.save()
+
+        response = self.client.post(
+            '/api/v1/user/esqueci-senha/',
+            {'email': 'nova@unistock.com'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['nova@unistock.com'])
+
+    def test_conta_desativada_de_proposito_continua_bloqueada(self):
+        """Quem ja definiu senha e foi desativado nao recebe link de volta."""
+        from django.core import mail
+
+        banida = User.objects.create_user(
+            username='banida@unistock.com', email='banida@unistock.com',
+            password='tinha-senha-123',
+        )
+        banida.is_active = False
+        banida.save(update_fields=['is_active'])
+
+        response = self.client.post(
+            '/api/v1/user/esqueci-senha/',
+            {'email': 'banida@unistock.com'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_email_que_nao_e_texto_da_400_e_nao_500(self):
+        response = self.client.post(
+            '/api/v1/user/esqueci-senha/', {'email': 12345}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)

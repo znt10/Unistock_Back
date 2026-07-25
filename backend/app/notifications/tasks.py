@@ -39,6 +39,35 @@ def enviar_email_confirmacao(user_id):
     return despachar(usuario, "Confirme sua conta no Unistock", mensagem) > 0
 
 
+@shared_task
+def enviar_email_definir_senha(user_id):
+    """Manda o link de definir senha (1o acesso da loja ou 'esqueci a senha')."""
+    from django.core.mail import send_mail
+
+    from .tokens import gerar_token_senha
+
+    usuario = User.objects.filter(id=user_id).first()
+    if not usuario or not usuario.email:
+        return False
+
+    link = f"{settings.FRONTEND_URL}/redefinir-senha/{gerar_token_senha(usuario)}"
+    mensagem = (
+        "Ola!\n\n"
+        "Para acessar o Unistock, defina a senha desta conta pelo link:\n"
+        f"{link}\n\n"
+        "O link vale por 3 dias e pode ser usado uma unica vez.\n"
+        "Se voce nao pediu isso, ignore este email."
+    )
+    send_mail(
+        "Defina a senha da sua conta no Unistock",
+        mensagem,
+        settings.DEFAULT_FROM_EMAIL,
+        [usuario.email],
+        fail_silently=False,
+    )
+    return True
+
+
 def _enviar_pdf(destinatarios, assunto, corpo, nome_arquivo, pdf):
     """Um email com o PDF anexado. Envio direto: o destinatario e a loja/gerente,
     nao ha preferencia por usuario a respeitar aqui."""

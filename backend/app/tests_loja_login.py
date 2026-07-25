@@ -69,3 +69,39 @@ class TokenSenhaTests(TestCase):
         with patch('django.core.signing.time.time', return_value=futuro):
             with self.assertRaises(signing.SignatureExpired):
                 validar_token_senha(token)
+
+
+class EmailDefinirSenhaTests(TestCase):
+    def test_envia_link_de_definir_senha(self):
+        from django.core import mail
+
+        from app.notifications.tasks import enviar_email_definir_senha
+
+        user = User.objects.create_user(
+            username='lapa@unistock.com', email='lapa@unistock.com',
+        )
+
+        enviado = enviar_email_definir_senha(user.id)
+
+        self.assertTrue(enviado)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['lapa@unistock.com'])
+        self.assertIn('/redefinir-senha/', mail.outbox[0].body)
+
+    def test_usuario_inexistente_nao_envia(self):
+        from django.core import mail
+
+        from app.notifications.tasks import enviar_email_definir_senha
+
+        self.assertFalse(enviar_email_definir_senha(99999))
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_usuario_sem_email_nao_envia(self):
+        from django.core import mail
+
+        from app.notifications.tasks import enviar_email_definir_senha
+
+        user = User.objects.create_user(username='sem-email')
+
+        self.assertFalse(enviar_email_definir_senha(user.id))
+        self.assertEqual(len(mail.outbox), 0)

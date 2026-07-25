@@ -204,6 +204,9 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Unistock <no-reply@unistock.local>")
-
+# Timeout curto: no Railway a conexao SMTP tenta o IPv6 do Gmail primeiro, que
+# cai num buraco negro e so estoura no timeout padrao do TCP (~134s) antes de
+# cair pro IPv4. Com 10s a tentativa IPv6 desiste rapido e o fallback IPv4 envia.
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
 # URL do front, usada para montar links em emails (confirmacao de conta).
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")

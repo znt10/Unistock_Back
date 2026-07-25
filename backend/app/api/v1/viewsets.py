@@ -510,3 +510,49 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
             user.save(update_fields=['is_active'])
 
         return Response({"detail": "Conta confirmada. Voce ja pode fazer login."})
+
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path=r'definir-senha/(?P<token>[^/]+)',
+        permission_classes=[AllowAny],
+    )
+    def definir_senha(self, request, token=None):
+        """POST /api/v1/user/definir-senha/<token>/ — define a senha e ativa."""
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError
+
+        from app.notifications.tokens import validar_token_senha
+
+        try:
+            user_id = validar_token_senha(token)
+        except signing.SignatureExpired:
+            return Response(
+                {"error": "Link expirado. Peca um novo em 'Esqueci a senha'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except signing.BadSignature:
+            return Response(
+                {"error": "Link invalido ou ja utilizado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        senha = request.data.get('password') or ''
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response(
+                {"error": "Link invalido."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            validate_password(senha, user)
+        except ValidationError as erro:
+            return Response(
+                {"password": list(erro.messages)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(senha)
+        user.is_active = True
+        user.save(update_fields=['password', 'is_active'])
+        return Response({"detail": "Senha definida. Voce ja pode entrar."})

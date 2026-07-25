@@ -286,3 +286,66 @@ class TrocarEmailDaLojaTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.data)
+
+
+class DefinirSenhaTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='lapa@unistock.com', email='lapa@unistock.com',
+        )
+        self.user.set_unusable_password()
+        self.user.is_active = False
+        self.user.save()
+
+    def _token(self):
+        from app.notifications.tokens import gerar_token_senha
+
+        return gerar_token_senha(self.user)
+
+    def test_define_a_senha_e_ativa_a_conta(self):
+        response = self.client.post(
+            f'/api/v1/user/definir-senha/{self._token()}/',
+            {'password': 'SenhaForte#2026'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertTrue(self.user.check_password('SenhaForte#2026'))
+
+    def test_token_invalido_400(self):
+        response = self.client.post(
+            '/api/v1/user/definir-senha/token-falso/',
+            {'password': 'SenhaForte#2026'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_senha_fraca_400(self):
+        response = self.client.post(
+            f'/api/v1/user/definir-senha/{self._token()}/',
+            {'password': '123'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.has_usable_password())
+
+    def test_mesmo_token_nao_serve_duas_vezes(self):
+        token = self._token()
+        self.client.post(
+            f'/api/v1/user/definir-senha/{token}/',
+            {'password': 'SenhaForte#2026'}, format='json',
+        )
+
+        response = self.client.post(
+            f'/api/v1/user/definir-senha/{token}/',
+            {'password': 'OutraSenha#2026'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('SenhaForte#2026'))

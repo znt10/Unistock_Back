@@ -466,3 +466,71 @@ class EsqueciSenhaTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class ConverterResponsaveisTests(TestCase):
+    def test_converte_login_para_o_email_da_loja(self):
+        from app.migracoes_loja_login import converter_responsaveis
+
+        pessoa = User.objects.create_user(
+            username='joao@gmail.com', email='joao@gmail.com', password='123',
+        )
+        loja = Loja.objects.create(
+            nome_loja='Lapa', cidade='Patos', endereco='Rua 1',
+            email='lapa@unistock.com', responsavel=pessoa,
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        pessoa.refresh_from_db()
+        self.assertEqual(pessoa.username, 'lapa@unistock.com')
+        self.assertEqual(pessoa.email, 'lapa@unistock.com')
+        self.assertEqual(convertidos, 1)
+        self.assertEqual(pulados, [])
+        self.assertEqual(loja.responsavel_id, pessoa.id)  # mesmo usuario
+
+    def test_pula_loja_sem_email(self):
+        from app.migracoes_loja_login import converter_responsaveis
+
+        pessoa = User.objects.create_user(username='maria@gmail.com', password='123')
+        Loja.objects.create(
+            nome_loja='Sem Email', cidade='Patos', endereco='Rua 2',
+            responsavel=pessoa,
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        pessoa.refresh_from_db()
+        self.assertEqual(pessoa.username, 'maria@gmail.com')  # intacto
+        self.assertEqual(convertidos, 0)
+        self.assertEqual(len(pulados), 1)
+
+    def test_pula_quando_o_email_ja_pertence_a_outro_usuario(self):
+        from app.migracoes_loja_login import converter_responsaveis
+
+        User.objects.create_user(username='lapa@unistock.com', password='123')
+        pessoa = User.objects.create_user(username='pedro@gmail.com', password='123')
+        Loja.objects.create(
+            nome_loja='Lapa', cidade='Patos', endereco='Rua 1',
+            email='lapa@unistock.com', responsavel=pessoa,
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        pessoa.refresh_from_db()
+        self.assertEqual(pessoa.username, 'pedro@gmail.com')  # intacto
+        self.assertEqual(convertidos, 0)
+        self.assertEqual(len(pulados), 1)
+
+    def test_nao_mexe_em_loja_sem_responsavel(self):
+        from app.migracoes_loja_login import converter_responsaveis
+
+        Loja.objects.create(
+            nome_loja='Vazia', cidade='Patos', endereco='Rua 3',
+            email='vazia@unistock.com',
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        self.assertEqual(convertidos, 0)
+        self.assertEqual(pulados, [])

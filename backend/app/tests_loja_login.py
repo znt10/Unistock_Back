@@ -257,3 +257,32 @@ class TrocarEmailDaLojaTests(APITestCase):
         loja_sem.refresh_from_db()
         self.assertIsNotNone(loja_sem.responsavel)
         self.assertEqual(loja_sem.responsavel.username, 'depois@unistock.com')
+
+    def test_nao_permite_limpar_o_email_de_loja_com_acesso(self):
+        """Limpar o email zeraria o username: a conta ficaria irrecuperavel e a
+        proxima loja que limpasse colidiria no username vazio."""
+        response = self.client.patch(
+            f'/api/v1/lojas/{self.loja.public_id}/',
+            {'email': ''},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('email', response.data)
+        acesso = self.loja.responsavel
+        acesso.refresh_from_db()
+        self.assertEqual(acesso.username, 'antigo@unistock.com')
+
+    def test_loja_sem_acesso_pode_ficar_sem_email(self):
+        """Sem login pra quebrar, continua sendo um estado valido."""
+        loja_sem = Loja.objects.create(
+            nome_loja='Sem Acesso', cidade='Patos', endereco='Rua 3',
+        )
+
+        response = self.client.patch(
+            f'/api/v1/lojas/{loja_sem.public_id}/',
+            {'email': ''},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)

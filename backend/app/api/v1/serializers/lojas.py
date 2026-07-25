@@ -89,6 +89,15 @@ class LojaSerializer(serializers.ModelSerializer):
         cadastro publico e aberto), e a criacao da loja quebraria no meio.
         """
         if not value:
+            # Sem email a loja fica sem acesso — mas se ela JA tem um login, o
+            # username viraria vazio: aquela conta fica irrecuperavel (sem
+            # endereco pra receber o link) e a proxima loja que limpar o email
+            # colide no username vazio. Trocar por outro email continua valendo.
+            if self.instance and self.instance.responsavel_id:
+                raise serializers.ValidationError(
+                    "Nao da para remover o e-mail de uma loja que ja tem acesso. "
+                    "Troque por outro e-mail, ou desative a loja."
+                )
             return value
 
         value = value.strip().lower()

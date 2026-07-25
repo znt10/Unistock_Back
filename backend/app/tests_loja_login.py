@@ -136,7 +136,8 @@ class CriarLojaCriaAcessoTests(APITestCase):
     def test_loja_com_email_ganha_login_proprio(self):
         from django.core import mail
 
-        response = self.client.post('/api/v1/lojas/', self._payload(), format='json')
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post('/api/v1/lojas/', self._payload(), format='json')
 
         self.assertEqual(response.status_code, 201, response.data)
         loja = Loja.objects.get(nome_loja='Lapa')
@@ -171,3 +172,43 @@ class CriarLojaCriaAcessoTests(APITestCase):
 
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn('email', response.data)
+
+    def test_email_ja_usado_por_uma_conta_e_recusado(self):
+        """Cadastro publico e aberto: alguem pode ter registrado esse email
+        antes. Tem que dar 400, nao 500 com a loja pela metade."""
+        User.objects.create_user(
+            username='lapa@unistock.com', email='lapa@unistock.com', password='123',
+        )
+
+        response = self.client.post('/api/v1/lojas/', self._payload(), format='json')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('email', response.data)
+        self.assertFalse(Loja.objects.filter(nome_loja='Lapa').exists())
+
+    def test_nao_da_para_escolher_o_responsavel_pela_api(self):
+        """responsavel e read-only: era possivel se auto-atribuir a loja e
+        ganhar acesso aos dados dela."""
+        self.client.post('/api/v1/lojas/', self._payload(), format='json')
+        loja = Loja.objects.get(nome_loja='Lapa')
+        acesso_original = loja.responsavel_id
+        invasor = User.objects.create_user(username='invasor', password='123')
+
+        response = self.client.patch(
+            f'/api/v1/lojas/{loja.public_id}/',
+            {'responsavel': invasor.id}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        loja.refresh_from_db()
+        self.assertEqual(loja.responsavel_id, acesso_original)
+
+    def test_loja_sem_acesso_devolve_email_acesso_nulo(self):
+        """O front le esse campo; ele nao pode sumir do JSON."""
+        response = self.client.post(
+            '/api/v1/lojas/', self._payload(email=''), format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn('email_acesso', response.data)
+        self.assertIsNone(response.data['email_acesso'])

@@ -73,9 +73,12 @@ class TokenSenhaTests(TestCase):
 
 class EmailDefinirSenhaTests(TestCase):
     def test_envia_link_de_definir_senha(self):
+        import re
+
         from django.core import mail
 
         from app.notifications.tasks import enviar_email_definir_senha
+        from app.notifications.tokens import validar_token_senha
 
         user = User.objects.create_user(
             username='lapa@unistock.com', email='lapa@unistock.com',
@@ -86,7 +89,11 @@ class EmailDefinirSenhaTests(TestCase):
         self.assertTrue(enviado)
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ['lapa@unistock.com'])
-        self.assertIn('/redefinir-senha/', mail.outbox[0].body)
+
+        # O link tem que carregar um token que realmente funciona e aponta pra
+        # esta conta — nao basta a URL parecer certa.
+        token = re.search(r"/redefinir-senha/(\S+)", mail.outbox[0].body).group(1)
+        self.assertEqual(validar_token_senha(token), user.id)
 
     def test_usuario_inexistente_nao_envia(self):
         from django.core import mail

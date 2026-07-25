@@ -11,10 +11,13 @@ produto. O objetivo é:
 
 1. **Alerta imediato = só in-app.** Matar o e-mail por produto.
 2. **Gerente enxerga tudo centralizado** — não só o que ele mesmo editou.
-3. **Resumo diário por e-mail em PDF**, às 6h, com a lista de produtos abaixo do
-   mínimo. O gerente recebe **um único PDF com todas as lojas juntas**
-   (agrupadas por loja no documento); cada responsável recebe o PDF só das lojas
-   dele.
+3. **Resumo diário por e-mail em PDF, às 7h** (começo do expediente — a loja
+   abre 7h), com a lista de produtos abaixo do mínimo. O e-mail vai para o
+   **e-mail da loja** (`Loja.email`), não para o e-mail pessoal: quem está no
+   turno lê a caixa da loja, o responsável muda mas o e-mail não. **Um e-mail
+   separado por loja** (PDF só daquela loja). O **gerente** recebe **um único
+   PDF com todas as lojas juntas** (agrupadas por loja). Sem liga/desliga por
+   enquanto: toda loja ativa, com e-mail cadastrado e com item baixo, recebe.
 
 ## O que já existe (não reconstruir)
 
@@ -44,9 +47,10 @@ produto. O objetivo é:
 |---|---|
 | Formato do resumo diário | **PDF anexo** |
 | Gerente vê tudo | **Push no sininho + página de painel** (os dois) |
-| Digest — horário/escopo | **6h**; responsável = suas lojas, gerente = **todas num só PDF** |
-| Digest automático? | **Sim** — `digest_ativo` nasce `True`, backfill nas preferências existentes; dá pra desligar nas configurações |
-| Caminho do anexo | Estender `EmailChannel` para anexos, via `despachar()` (respeita `email_ativo`) |
+| Digest — horário | **7h** (início do expediente) |
+| Digest — destinatário | **E-mail da loja** (`Loja.email`), 1 e-mail separado por loja; **gerente** = 1 PDF combinado de todas as lojas |
+| Digest — liga/desliga | **Sem toggle** por enquanto: toda loja ativa com e-mail e item baixo recebe |
+| Caminho do e-mail do digest | **Envio direto** (`EmailMessage`): o destinatário é a loja/gerente, não passa pela preferência por usuário |
 
 ## Frentes de implementação
 
@@ -83,56 +87,70 @@ produto. O objetivo é:
   mínimo agrupados por loja, com `getEstoquesBaixos()` no service (`services/uni.ts`)
   batendo em `/estoque/baixos/`, e link no `Sidebar`.
 
-### 4 · Resumo diário em PDF (6h, gerente = 1 PDF de tudo)
+### 4 · Resumo diário em PDF por loja (7h)
+
+Destinatário deixa de ser o usuário e passa a ser a **loja** (`Loja.email`). O
+digest vira um **agendamento diário fixo às 7h** que percorre as lojas e os
+gerentes — mais simples que o polling de 15 min + preferência por usuário de hoje.
 
 - **Novo módulo** `app/relatorios/estoque_baixo_pdf.py`:
   `gerar_estoque_baixo_pdf(estoques, *, titulo, subtitulo) -> bytes` — reaproveita
   o padrão/CSS de `pedidos_pdf.py`, agrupa por loja, retorna **bytes**
-  (`HTML(string=...).write_pdf()`), não `HttpResponse`.
-- `app/notifications/tasks.py` `enviar_digest(user_id)`:
-  - Escopo por papel: se `_is_gerente_ou_admin(usuario)` → todas as lojas ativas
-    (`Estoque.objects.filter(loja__ativo=True, ...)`); senão → só
-    `loja__responsavel=usuario`.
-  - Query de baixos (mesma condição de mínimo), `select_related("produto","loja")`,
-    ordenado por loja/produto.
-  - Se vazio → não envia (comportamento atual preservado).
-  - Gera o PDF e envia **como anexo** via `despachar(usuario, titulo, mensagem,
-    contexto={"anexos": [(nome_arquivo, pdf_bytes, "application/pdf")]})`.
-- **Anexo via canal** — `app/notifications/channels.py` `EmailChannel.send`:
-  quando `contexto["anexos"]` existir, montar um `django.core.mail.EmailMessage`
-  (from/to/subject/body), `.attach(nome, bytes, mime)` para cada anexo e
-  `.send()`; sem anexos, mantém o `send_mail` atual. `WhatsAppChannel` ignora o
-  anexo (fase 2). `despachar` já repassa o `contexto`.
-- **Horário 6h** — migração de model: `PreferenciaNotificacao.digest_horario`
-  default `datetime.time(6, 0)`. O beat de 15 min dispara sozinho depois das 6h.
+  (`HTML(string=...).write_pdf()`), não `HttpResponse`. Serve tanto para o PDF de
+  uma loja quanto para o combinado (é a mesma função, muda a lista de estoques).
+- **Nova task** `enviar_digest_lojas()` (substitui `disparar_digests`/
+  `enviar_digest` por usuário):
+  - Query base de baixos: `Estoque.objects.filter(loja__ativo=True,
+    quantidade_minima__gt=0, quantidade_atual__lte=F("quantidade_minima"))`
+    `.select_related("produto", "loja")`, ordenado por loja/produto.
+  - **Por loja:** agrupa os baixos por loja; para cada loja que tem `email`
+    preenchido e ao menos um item baixo, gera o PDF só daquela loja e envia um
+    `EmailMessage` para `loja.email`. Loja sem e-mail é pulada (segue no combinado
+    do gerente).
+  - **Gerente:** se houver qualquer item baixo, gera **um PDF combinado** (todas
+    as lojas) e envia para cada gerente/admin ativo com e-mail
+    (`User.objects.filter(groups__name__in=["Gerente","Admin"], is_active=True)`).
+  - Se não há nada baixo em lugar nenhum → não envia nada.
+- **Envio direto** (`django.core.mail.EmailMessage` + `.attach(nome, bytes,
+  "application/pdf")` + `.send()`), respeitando `EMAIL_TIMEOUT`. Não passa por
+  `despachar()`/`EmailChannel`: o destinatário é a loja/gerente, não há
+  preferência por usuário a respeitar aqui. (A extensão de anexo no `EmailChannel`
+  fica **fora de escopo** — não é mais necessária.)
+- **Agendamento 7h** — trocar a `PeriodicTask` da migração `0014` de
+  `IntervalSchedule(15 min)` → `CrontabSchedule(hour=7, minute=0)` apontando para
+  `enviar_digest_lojas`. Nova migração que atualiza o agendamento.
+- **Sem toggle / sem catch-up** — dispara uma vez às 7h; se o beat estiver fora
+  do ar exatamente nesse minuto, o dia é pulado (aceitável; ver Riscos).
 
-### 5 · Digest automático (opt-out em vez de opt-in)
+### 5 · Limpeza do digest por usuário (agora morto)
 
-- `PreferenciaNotificacao.digest_ativo` default → `True`.
-- **Data migration** (backfill): para as `PreferenciaNotificacao` existentes,
-  setar `digest_ativo=True` e `digest_horario=time(6,0)` **apenas onde ainda
-  estiver no default antigo** (`time(18,0)`), preservando horário que alguém já
-  tenha escolhido de propósito.
-- **Cobertura de novos/atuais usuários** — o loop do digest itera sobre linhas
-  de `PreferenciaNotificacao` (criadas sob demanda). Para o "automático" valer:
-  - Backfill cria a linha para todos os usuários ativos existentes
-    (`get_or_create` no migration).
-  - No cadastro de usuário (`UsuarioViewSet.registrar`/`create`), garantir
-    `PreferenciaNotificacao.objects.get_or_create(usuario=user)` (1 linha), para
-    todo novo usuário já ter preferência.
+Como o digest passou a ser por loja, o controle "resumo diário" por usuário
+morre. Para não deixar botão que mente:
+
+- **Front** — remover os controles de digest (`digest_ativo`, `digest_horario`,
+  `digest_dias_semana`) da página `/configuracoes/notificacoes` e do hook
+  `usePreferenciasNotificacao`. As preferências de **canal** (`email_ativo`,
+  `whatsapp_ativo`) permanecem.
+- **Back** — remover os campos de digest do `PreferenciaNotificacaoSerializer` e
+  a task antiga `disparar_digests`/`enviar_digest`. Os campos do model
+  (`digest_*`, `ultimo_digest_em`) podem ser **removidos numa migração de
+  follow-up** (baixa prioridade) ou ficar inertes; o essencial é nenhuma UI expor
+  controle sem efeito.
 
 ## Testes
 
-- `tests_digest.py`:
-  - Atualizar `test_digest_envia_um_email_com_itens_baixos` para checar que o
-    e-mail tem **anexo PDF** (`mail.outbox[0].attachments` não vazio, mime
-    `application/pdf`).
-  - Novo: gerente recebe **1 PDF com todas as lojas**; responsável recebe só as
-    suas.
+- `tests_digest.py` (reescrever para o modelo por loja):
+  - Duas lojas com item baixo, ambas com `email` → **dois e-mails**, cada um com
+    anexo PDF (`application/pdf`), endereçado ao `Loja.email` respectivo.
+  - Loja com item baixo mas **sem e-mail** → não gera e-mail de loja (mas entra
+    no combinado do gerente).
+  - Gerente/admin ativo com e-mail recebe **um** e-mail com o PDF combinado de
+    todas as lojas.
+  - Nada abaixo do mínimo em lugar nenhum → `mail.outbox` vazio.
 - `app/notifications/`:
   - `notificar_estoque_baixo` cria `Notificacao` para o gerente **mesmo quando
     quem edita é o responsável**, e **`mail.outbox` fica vazio** (sem e-mail
-    imediato).
+    imediato por produto).
 - Endpoint `/estoque/baixos/`: gerente vê todas as lojas, responsável só as
   suas; produtos acima do mínimo não aparecem.
 - Self-check no `estoque_baixo_pdf` (assert com dados sintéticos: bytes não
@@ -143,15 +161,25 @@ produto. O objetivo é:
 - Canal de WhatsApp (fase 2 — stub já existe).
 - Reescrita do relatório de pedidos.
 - Preferência de formato por usuário (PDF é fixo no digest).
+- Toggle de liga/desliga do digest (adiado; hoje é sempre-ligado por loja).
+- Extensão de anexo no `EmailChannel` (o digest envia direto, não precisa).
 
 ## Riscos / observações
 
-- **WeasyPrint só roda no container** (deps nativas). O digest roda no worker
-  (que já tem o ambiente); testes de PDF dependem do WeasyPrint instalado no
-  ambiente de teste — se o CI não tiver, marcar o self-check para pular fora do
-  container.
-- **Volume no sininho do gerente** — em operação com muitas lojas, o gerente
-  pode acumular notificações; mitigado pelo dedup por episódio e pelos botões
-  `todas-lidas`/`limpar` já existentes.
+- **Container:** não precisa de container novo. O worker roda a **mesma imagem**
+  da API, que já tem `weasyprint==66.0` + `libpango`/`libpangoft2` no Dockerfile
+  (o relatório de pedidos já gera PDF nela). O digest roda no worker sem ambiente
+  extra.
+- **Memória do WeasyPrint:** cada PDF consome bastante RAM e às 7h vários saem
+  juntos. Gerar em **sequência** (loop na task, PDF descartado entre lojas) e, se
+  preciso, limitar `--concurrency` do worker. Não é caso de container à parte.
+- **Sem catch-up:** o crontab dispara uma vez às 7h; se o beat estiver fora do ar
+  nesse minuto, o digest do dia é pulado (sem reenvio). Aceitável agora; se virar
+  problema, voltar ao polling + idempotência por loja.
+- **`Loja.email` operacional:** loja sem e-mail cadastrado não recebe o resumo
+  (só entra no combinado do gerente). Preencher o e-mail de cada loja é
+  pré-requisito para o digest por loja funcionar.
+- **Testes de PDF** dependem do WeasyPrint no ambiente de teste — se o CI não
+  tiver as deps nativas, pular o self-check fora do container.
 - **DAG do git instável** pelos hooks do ruflo — commitar em passos pequenos e
   verificar o branch antes de push.

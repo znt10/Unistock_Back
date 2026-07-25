@@ -49,13 +49,22 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         # Uma notificacao por episodio de estoque baixo (lida ou nao); quando o
         # estoque recupera, o EstoqueUpdateSerializer apaga as do episodio e um
         # novo episodio volta a notificar. Dedup pela FK do estoque.
-        ja_existe = Notificacao.objects.filter(
+        #
+        # Se ja existe, ATUALIZA a mensagem em vez de pular: o estoque pode ter
+        # mudado e continuado baixo (3 -> 1), e uma notificacao presa no numero
+        # antigo mente sobre o estado atual. Atualizar mantem uma so notificacao
+        # (sem spam) com o valor certo.
+        existente = Notificacao.objects.filter(
             usuario=usuario,
             tipo="estoque_baixo",
             estoque=estoque,
-        ).exists()
+        ).first()
 
-        if ja_existe:
+        if existente:
+            if existente.mensagem != mensagem:
+                existente.mensagem = mensagem
+                existente.lida = False  # numero mudou: volta a pedir atencao
+                existente.save(update_fields=["mensagem", "lida", "updated_at"])
             continue
 
         Notificacao.objects.create(

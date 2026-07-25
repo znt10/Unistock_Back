@@ -1,8 +1,11 @@
 """A loja como login: token de senha, criacao de acesso e migracao."""
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.core import signing
 from django.test import TestCase
+from rest_framework.test import APITestCase
+
+from app.models import Loja
 
 
 class TokenSenhaTests(TestCase):
@@ -112,3 +115,59 @@ class EmailDefinirSenhaTests(TestCase):
 
         self.assertFalse(enviar_email_definir_senha(user.id))
         self.assertEqual(len(mail.outbox), 0)
+
+
+class CriarLojaCriaAcessoTests(APITestCase):
+    def setUp(self):
+        Group.objects.get_or_create(name='Responsavel')
+        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.gerente = User.objects.create_user(username='ger', password='123')
+        self.gerente.groups.add(grupo_gerente)
+        self.client.force_authenticate(self.gerente)
+
+    def _payload(self, **extra):
+        dados = {
+            'nome_loja': 'Lapa', 'cidade': 'Patos', 'endereco': 'Rua 1',
+            'email': 'lapa@unistock.com',
+        }
+        dados.update(extra)
+        return dados
+
+    def test_loja_com_email_ganha_login_proprio(self):
+        from django.core import mail
+
+        response = self.client.post('/api/v1/lojas/', self._payload(), format='json')
+
+        self.assertEqual(response.status_code, 201, response.data)
+        loja = Loja.objects.get(nome_loja='Lapa')
+        self.assertIsNotNone(loja.responsavel)
+        acesso = loja.responsavel
+        self.assertEqual(acesso.username, 'lapa@unistock.com')
+        self.assertEqual(acesso.email, 'lapa@unistock.com')
+        self.assertFalse(acesso.is_active)
+        self.assertFalse(acesso.has_usable_password())
+        self.assertTrue(acesso.groups.filter(name='Responsavel').exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['lapa@unistock.com'])
+
+    def test_loja_sem_email_nao_cria_login(self):
+        from django.core import mail
+
+        response = self.client.post(
+            '/api/v1/lojas/', self._payload(email=''), format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        loja = Loja.objects.get(nome_loja='Lapa')
+        self.assertIsNone(loja.responsavel)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_duas_lojas_com_o_mesmo_email_e_recusado(self):
+        self.client.post('/api/v1/lojas/', self._payload(), format='json')
+
+        response = self.client.post(
+            '/api/v1/lojas/', self._payload(nome_loja='Outra'), format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('email', response.data)

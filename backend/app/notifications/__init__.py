@@ -26,8 +26,13 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
     if estoque.loja.responsavel:
         usuarios.append(estoque.loja.responsavel)
 
-    if _is_gerente_ou_admin(usuario_editor):
-        usuarios.append(usuario_editor)
+    # Gerente/admin acompanha o estoque baixo de TODAS as lojas, tenha editado
+    # ou nao: e a visao centralizada dele.
+    usuarios.extend(
+        User.objects.filter(
+            groups__name__in=["Gerente", "Admin"], is_active=True
+        ).distinct()
+    )
 
     usuarios = list({usuario.id: usuario for usuario in usuarios}.values())
     if not usuarios:
@@ -40,7 +45,6 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         f"Minimo: {estoque.quantidade_minima}."
     )
 
-    notificados = []
     for usuario in usuarios:
         # Uma notificacao por episodio de estoque baixo (lida ou nao); quando o
         # estoque recupera, o EstoqueUpdateSerializer apaga as do episodio e um
@@ -62,13 +66,9 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
             titulo=titulo,
             mensagem=mensagem,
         )
-        notificados.append(usuario.id)
 
-    if notificados:
-        # Email assincrono via Celery, so para quem ganhou notificacao nova.
-        from app.notifications.tasks import enviar_alerta_estoque_baixo
-
-        enviar_alerta_estoque_baixo.delay(estoque.id, notificados)
+    # Sem email por produto: o alerta imediato e so in-app (sininho). O email
+    # de estoque sai uma vez por dia, no digest das 7h (por loja).
 
 
 def notificar_estoques_baixos_do_pedido(

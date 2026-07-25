@@ -241,6 +241,42 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             ).exists()
         )
 
+    def test_gerente_recebe_notificacao_de_qualquer_loja(self):
+        """Gerente ve estoque baixo de todas as lojas, mesmo sem ter editado."""
+        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        grupo_responsavel, _ = Group.objects.get_or_create(name='Responsavel')
+        gerente = User.objects.create_user(
+            username='ger@email.com', email='ger@email.com', password='123456',
+        )
+        gerente.groups.add(grupo_gerente)
+        responsavel = User.objects.create_user(
+            username='resp2@email.com', email='resp2@email.com', password='123456',
+        )
+        responsavel.groups.add(grupo_responsavel)
+
+        loja = Loja.objects.create(
+            nome_loja='Loja do Resp', cidade='Patos', endereco='Rua 9',
+            responsavel=responsavel,
+        )
+        produto = Produto.objects.create(nome_produto='Guarana', categoria='MERCADO')
+        estoque = Estoque.objects.create(
+            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=3,
+        )
+
+        # Quem mexeu foi o responsavel, nao o gerente.
+        notificar_estoque_baixo(estoque, usuario_editor=responsavel)
+
+        self.assertTrue(
+            Notificacao.objects.filter(
+                usuario=gerente, tipo='estoque_baixo', estoque=estoque
+            ).exists()
+        )
+        self.assertTrue(
+            Notificacao.objects.filter(
+                usuario=responsavel, tipo='estoque_baixo', estoque=estoque
+            ).exists()
+        )
+
     def test_nao_duplica_notificacao_do_mesmo_estoque(self):
         usuario = User.objects.create_user(
             username='loja',
@@ -275,6 +311,70 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             ).count(),
             1,
         )
+
+
+class EstoqueBaixosTests(APITestCase):
+    """Painel de estoque baixo: /estoque/baixos/ (gerente ve todas as lojas)."""
+
+    def setUp(self):
+        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.gerente = User.objects.create_user(username='ger', password='123')
+        self.gerente.groups.add(grupo_gerente)
+        self.resp_a = User.objects.create_user(username='respa', password='123')
+
+        self.loja_a = Loja.objects.create(
+            nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
+            responsavel=self.resp_a,
+        )
+        self.loja_b = Loja.objects.create(
+            nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
+        )
+        coxinha = Produto.objects.create(
+            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+        )
+        coca = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+
+        # Baixo na loja A, baixo na loja B, e um em dia na loja A.
+        Estoque.objects.create(
+            loja=self.loja_a, produto=coxinha,
+            quantidade_atual=1, quantidade_minima=5,
+        )
+        Estoque.objects.create(
+            loja=self.loja_b, produto=coxinha,
+            quantidade_atual=0, quantidade_minima=3,
+        )
+        Estoque.objects.create(
+            loja=self.loja_a, produto=coca,
+            quantidade_atual=50, quantidade_minima=5,
+        )
+
+    def test_gerente_ve_baixos_de_todas_as_lojas(self):
+        self.client.force_authenticate(self.gerente)
+
+        response = self.client.get('/api/v1/estoque/baixos/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        nomes_lojas = {item['loja_nome'] for item in response.data}
+        self.assertEqual(nomes_lojas, {'Loja A', 'Loja B'})
+        self.assertEqual(len(response.data), 2)
+
+    def test_responsavel_ve_apenas_baixos_da_sua_loja(self):
+        self.client.force_authenticate(self.resp_a)
+
+        response = self.client.get('/api/v1/estoque/baixos/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['loja_nome'], 'Loja A')
+        self.assertEqual(response.data[0]['produto_nome'], 'Coxinha')
+
+    def test_produto_acima_do_minimo_nao_aparece(self):
+        self.client.force_authenticate(self.gerente)
+
+        response = self.client.get('/api/v1/estoque/baixos/')
+
+        produtos = {item['produto_nome'] for item in response.data}
+        self.assertNotIn('Coca', produtos)
 
 
 class EstoqueIntegridadeTests(APITestCase):
@@ -391,7 +491,8 @@ class NotificacaoAssincronaTests(APITestCase):
         response = self.client.get("/api/v1/user/confirmar/token-falso/")
         self.assertEqual(response.status_code, 400)
 
-    def test_alerta_estoque_baixo_envia_email_ao_responsavel(self):
+    def test_alerta_estoque_baixo_nao_envia_email(self):
+        """Alerta imediato e so in-app: email de estoque so no digest diario."""
         responsavel = User.objects.create_user(
             username='resp@email.com', email='resp@email.com', password='123456',
         )
@@ -407,13 +508,13 @@ class NotificacaoAssincronaTests(APITestCase):
 
         notificar_estoque_baixo(estoque)
 
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ['resp@email.com'])
-        self.assertIn('Coca', mail.outbox[0].body)
-
-        # Mesmo episodio nao reenvia email
-        notificar_estoque_baixo(estoque)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(
+            Notificacao.objects.filter(
+                usuario=responsavel, tipo='estoque_baixo'
+            ).count(),
+            1,
+        )
 
 
 class PreferenciaNotificacaoTests(APITestCase):
@@ -427,45 +528,23 @@ class PreferenciaNotificacaoTests(APITestCase):
         response = self.client.get('/api/v1/preferencias-notificacao/me/')
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['email_ativo'])
-        self.assertFalse(response.data['digest_ativo'])
-        self.assertEqual(response.data['digest_dias_semana'], '1,2,3,4,5')
+        self.assertFalse(response.data['whatsapp_ativo'])
 
     def test_patch_atualiza_preferencia(self):
         response = self.client.patch(
             '/api/v1/preferencias-notificacao/me/',
-            {'digest_ativo': True, 'digest_horario': '08:30',
-             'digest_dias_semana': '1,3,5', 'telefone_whatsapp': '+55 (83) 9999-0000'},
+            {'email_ativo': False, 'telefone_whatsapp': '+55 (83) 9999-0000'},
             format='json',
         )
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertTrue(response.data['digest_ativo'])
-        self.assertEqual(response.data['digest_dias_semana'], '1,3,5')
+        self.assertFalse(response.data['email_ativo'])
         self.assertEqual(response.data['telefone_whatsapp'], '558399990000')
 
-    def test_dias_invalidos_400(self):
-        response = self.client.patch(
-            '/api/v1/preferencias-notificacao/me/',
-            {'digest_dias_semana': '1,8'},
-            format='json',
-        )
-        self.assertEqual(response.status_code, 400)
+    def test_nao_expoe_configuracao_de_digest(self):
+        """Digest virou por loja (7h): nao ha mais ajuste por usuario."""
+        response = self.client.get('/api/v1/preferencias-notificacao/me/')
 
-    def test_email_desativado_nao_envia_alerta(self):
-        from app.models import PreferenciaNotificacao
-
-        PreferenciaNotificacao.objects.create(usuario=self.user, email_ativo=False)
-        loja = Loja.objects.create(
-            nome_loja='Loja Pref', cidade='Patos', endereco='Rua 1',
-            responsavel=self.user,
-        )
-        produto = Produto.objects.create(nome_produto='Cafe', categoria='MERCADO')
-        estoque = Estoque.objects.create(
-            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=5,
-        )
-
-        notificar_estoque_baixo(estoque)
-
-        # Notificacao no sino continua; email nao sai.
-        self.assertEqual(Notificacao.objects.filter(usuario=self.user).count(), 1)
-        self.assertEqual(len(mail.outbox), 0)
+        self.assertNotIn('digest_ativo', response.data)
+        self.assertNotIn('digest_horario', response.data)
+        self.assertNotIn('digest_dias_semana', response.data)
 

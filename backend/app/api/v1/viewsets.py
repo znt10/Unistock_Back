@@ -19,6 +19,7 @@ from app.models import (
 from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
+    EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
     PedidoSerializer,
     PedidoCreateSerializer,
@@ -137,6 +138,16 @@ class EstoqueViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='baixos')
+    def baixos(self, request):
+        """Produtos no/abaixo do minimo, no escopo do usuario.
+
+        Gerente/admin ve todas as lojas (visao centralizada); responsavel ve
+        so as dele — o escopo ja vem do get_queryset.
+        """
+        estoques = self.get_queryset().baixos()
+        return Response(EstoqueBaixoSerializer(estoques, many=True).data)
 
     def _validar_loja_do_responsavel(self, user, loja):
         if is_gerente_ou_admin(user):

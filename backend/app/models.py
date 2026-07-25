@@ -1,4 +1,3 @@
-import datetime
 import uuid
 
 from django.db import models
@@ -118,11 +117,31 @@ class ItemPedido(BaseModel):
         return f"{self.quantidade} x {self.produto.nome_produto} (Pedido {self.pedido.id})"
 
 
+class EstoqueQuerySet(models.QuerySet):
+    def baixos(self):
+        """Itens no/abaixo do minimo, em lojas ativas, prontos para exibir.
+
+        Usado pelo painel (/estoque/baixos/) e pelo digest diario — os dois
+        precisam da mesma definicao de "baixo".
+        """
+        return (
+            self.filter(
+                loja__ativo=True,
+                quantidade_minima__gt=0,
+                quantidade_atual__lte=models.F("quantidade_minima"),
+            )
+            .select_related("produto", "loja")
+            .order_by("loja__nome_loja", "produto__nome_produto")
+        )
+
+
 class Estoque(BaseModel):
     class EstadoProduto(models.TextChoices):
         NORMAL = "NORMAL", "Normal"
         CONGELADO = "CONGELADO", "Congelado"
         RESFRIADO = "RESFRIADO", "Resfriado"
+
+    objects = EstoqueQuerySet.as_manager()
 
     produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
     loja = models.ForeignKey(Loja, on_delete=models.CASCADE)
@@ -187,10 +206,11 @@ class MovimentacaoEstoque(BaseModel):
 
 
 class PreferenciaNotificacao(BaseModel):
-    """Preferencias de notificacao do usuario (canais e resumo diario).
+    """Canais de notificacao do usuario.
 
     Criada sob demanda (get_or_create) na primeira leitura — nao precisa de
-    signal no cadastro.
+    signal no cadastro. O resumo diario NAO fica aqui: ele e por loja (vai pro
+    email da loja as 7h), nao por usuario.
     """
 
     usuario = models.OneToOneField(
@@ -199,13 +219,6 @@ class PreferenciaNotificacao(BaseModel):
     email_ativo = models.BooleanField(default=True)
     whatsapp_ativo = models.BooleanField(default=False)
     telefone_whatsapp = models.CharField(max_length=20, blank=True, default="")
-    digest_ativo = models.BooleanField(default=False)
-    digest_horario = models.TimeField(default=datetime.time(18, 0))
-    # Dias ISO separados por virgula: 1=segunda ... 7=domingo
-    digest_dias_semana = models.CharField(max_length=20, default="1,2,3,4,5")
-    # Idempotencia: garante no maximo 1 digest por dia, mesmo com o beat
-    # rodando a cada 15 min (e recupera atraso se o beat ficar fora do ar).
-    ultimo_digest_em = models.DateField(null=True, blank=True)
 
     def __str__(self):
         return f"Preferencias de {self.usuario.username}"

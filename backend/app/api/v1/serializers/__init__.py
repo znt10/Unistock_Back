@@ -5,6 +5,7 @@ nomes continuam importaveis de `app.api.v1.serializers`.
 """
 
 from .estoque import (
+    EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
     EstoqueSerializer,
     EstoqueUpdateSerializer,
@@ -26,6 +27,7 @@ from .usuarios import UsuarioSerializer
 from .vendas import VendaCreateSerializer, VendaItemSerializer
 
 __all__ = [
+    "EstoqueBaixoSerializer",
     "EstoqueCreateSerializer",
     "EstoqueSerializer",
     "EstoqueUpdateSerializer",

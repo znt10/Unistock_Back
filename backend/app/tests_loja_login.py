@@ -296,6 +296,10 @@ class DefinirSenhaTests(APITestCase):
         self.user.set_unusable_password()
         self.user.is_active = False
         self.user.save()
+        # Conta real de loja sempre nasce no grupo Responsavel (ver
+        # criar_acesso_da_loja); sem grupo o LoginView recusa com 403.
+        grupo, _ = Group.objects.get_or_create(name='Responsavel')
+        self.user.groups.add(grupo)
 
     def _token(self):
         from app.notifications.tokens import gerar_token_senha
@@ -349,3 +353,34 @@ class DefinirSenhaTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password('SenhaForte#2026'))
+
+    def test_conta_consegue_entrar_depois_de_definir_a_senha(self):
+        """O objetivo da feature: a loja passa a conseguir entrar de verdade."""
+        self.client.post(
+            f'/api/v1/user/definir-senha/{self._token()}/',
+            {'password': 'SenhaForte#2026'}, format='json',
+        )
+
+        login = self.client.post('/login/', {
+            'email': 'lapa@unistock.com',
+            'password': 'SenhaForte#2026',
+        })
+
+        self.assertEqual(login.status_code, 200, getattr(login, 'data', login.content))
+        self.assertIn('access_token', login.cookies)
+
+    def test_link_expirado_avisa_para_pedir_outro(self):
+        from unittest.mock import patch
+        import time as _time
+
+        token = self._token()
+        futuro = _time.time() + 60 * 60 * 24 * 3 + 60
+
+        with patch('django.core.signing.time.time', return_value=futuro):
+            response = self.client.post(
+                f'/api/v1/user/definir-senha/{token}/',
+                {'password': 'SenhaForte#2026'}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('expirado', str(response.data).lower())

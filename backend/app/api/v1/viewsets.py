@@ -9,7 +9,9 @@ from django.utils.timezone import make_aware
 
 
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
 from django.core import signing
+from django.core.exceptions import ValidationError
 from django.db.models import F, Q
 
 from app.models import (
@@ -17,6 +19,7 @@ from app.models import (
     Notificacao, PreferenciaNotificacao,
 )
 from app.notifications.tasks import enviar_email_confirmacao, validar_token_confirmacao
+from app.notifications.tokens import validar_token_senha
 from .mixins import ResponsavelOuAdminMixin, UserOuAdminMixin
 from .serializers import (
     EstoqueBaixoSerializer,
@@ -519,11 +522,6 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
     )
     def definir_senha(self, request, token=None):
         """POST /api/v1/user/definir-senha/<token>/ — define a senha e ativa."""
-        from django.contrib.auth.password_validation import validate_password
-        from django.core.exceptions import ValidationError
-
-        from app.notifications.tokens import validar_token_senha
-
         try:
             user_id = validar_token_senha(token)
         except signing.SignatureExpired:
@@ -537,7 +535,15 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        senha = request.data.get('password') or ''
+        senha = request.data.get('password')
+        if not isinstance(senha, str):
+            # JSON aceita numero/lista/objeto; os validators do Django chamam
+            # .lower() e estouram AttributeError (500) num endpoint aberto.
+            return Response(
+                {"password": ["Informe a senha como texto."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user = User.objects.filter(id=user_id).first()
         if not user:
             return Response(

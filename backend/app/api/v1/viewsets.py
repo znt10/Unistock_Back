@@ -12,6 +12,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import F, Q
 
 from app.models import (
@@ -357,19 +358,24 @@ class PedidoViewSet( viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        status_anterior = pedido.status
+        # Trava o pedido e faz tudo numa transacao: sem isso, dois cliques (ou
+        # duas abas) passavam os dois pela guarda de ENTREGUE e o estoque era
+        # somado em dobro. Mesma protecao que a confirmacao do bot usa.
+        with transaction.atomic():
+            pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
+            status_anterior = pedido.status
 
-        if status_anterior == Pedido.Status.ENTREGUE and status_novo == Pedido.Status.ENTREGUE:
-            serializer = self.get_serializer(pedido)
-            return Response(serializer.data)
+            if status_anterior == Pedido.Status.ENTREGUE and status_novo == Pedido.Status.ENTREGUE:
+                serializer = self.get_serializer(pedido)
+                return Response(serializer.data)
 
-        pedido.status = status_novo
-        pedido.save(update_fields=['status', 'updated_at'])
+            pedido.status = status_novo
+            pedido.save(update_fields=['status', 'updated_at'])
 
-        if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
-            somar_itens_no_estoque(pedido)
+            if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
+                somar_itens_no_estoque(pedido)
 
-        notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
+            notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
 
         serializer = self.get_serializer(pedido)
         return Response(serializer.data)

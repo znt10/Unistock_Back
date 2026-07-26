@@ -192,6 +192,25 @@ class BotApiTests(APITestCase):
         estoque.refresh_from_db()
         self.assertEqual(estoque.quantidade_atual, 3)
 
+    def test_confirmar_pedido_cancelado_e_recusado(self):
+        """A guarda so olhava ENTREGUE: um pedido CANCELADO virava entregue e
+        entrava no estoque como uma ENTRADA que nunca aconteceu."""
+        pedido = Pedido.objects.create(
+            responsavel=self.responsavel, loja=self.loja,
+            status=Pedido.Status.CANCELADO,
+        )
+
+        response = self.client.post(
+            f"/api/v1/bot/pedido/{pedido.id}/confirmar/",
+            {"telefone": TELEFONE_LOJA},
+            format="json",
+            **HEADERS,
+        )
+
+        self.assertEqual(response.status_code, 409, response.data)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.status, Pedido.Status.CANCELADO)
+
     def test_confirmar_pedido_de_outra_loja_404(self):
         outro_user = User.objects.create_user(username="maria@email.com", password="123456")
         outra_loja = Loja.objects.create(

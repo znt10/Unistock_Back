@@ -56,32 +56,27 @@ class PedidoAPITestCase(APITestCase):
 
 
 
-    def test_registro_e_login(self):
-        # registra (conta nasce inativa; email de confirmacao no outbox)
-        self.client.post("/api/v1/user/registrar/", {
-            "email": "novo@email.com",
-            "password": "123456",
-            "tipo_usuario": "responsavel"
-        })
+    def test_gerente_cadastra_outro_gerente_que_ja_entra(self):
+        """Unico cadastro que sobrou: gerente/admin criando gerente.
 
-        # antes de confirmar, login e recusado com mensagem clara
+        A conta nasce ativa — nao ha mais confirmacao por email, porque nao ha
+        mais cadastro aberto para confirmar. Loja nao passa por aqui: ganha o
+        proprio acesso quando e cadastrada.
+        """
+        self.client.force_authenticate(user=self.gerente)
+        response = self.client.post("/api/v1/user/registrar/", {
+            "email": "novo@email.com",
+            "password": "SenhaForte#2026",
+            "tipo_usuario": "gerente",
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.client.force_authenticate(user=None)
+
         response = self.client.post("/login/", {
             "email": "novo@email.com",
-            "password": "123456"
+            "password": "SenhaForte#2026",
         })
-        self.assertEqual(response.status_code, 403)
-
-        # confirma pelo link do email
-        token = re.search(r"/confirmar-conta/(\S+)", mail.outbox[-1].body).group(1)
-        response = self.client.get(f"/api/v1/user/confirmar/{token}/")
-        self.assertEqual(response.status_code, 200)
-
-        # login
-        response = self.client.post("/login/", {
-            "email": "novo@email.com",
-            "password": "123456"
-        })
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 200, response.data)
 
 
 
@@ -500,19 +495,18 @@ class NotificacaoAssincronaTests(APITestCase):
         Group.objects.get_or_create(name='Responsavel')
         Group.objects.get_or_create(name='Gerente')
 
-    def test_registro_publico_cria_conta_inativa_e_envia_email(self):
+    def test_registro_publico_nao_existe_mais(self):
+        """Cadastro aberto acabou: loja ganha acesso ao ser criada, gerente so
+        por outro gerente/admin. Antes, um anonimo criava conta aqui."""
         response = self.client.post("/api/v1/user/registrar/", {
             "email": "ana@email.com",
             "password": "123456",
             "tipo_usuario": "responsavel",
         })
-        self.assertEqual(response.status_code, 201, response.data)
 
-        user = User.objects.get(username="ana@email.com")
-        self.assertFalse(user.is_active)
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertIn("/confirmar-conta/", mail.outbox[0].body)
-        self.assertEqual(mail.outbox[0].to, ["ana@email.com"])
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username="ana@email.com").exists())
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_token_invalido_400(self):
         response = self.client.get("/api/v1/user/confirmar/token-falso/")

@@ -14,6 +14,7 @@ from datetime import date
 from types import SimpleNamespace
 
 from django.conf import settings
+from django.db import transaction
 from django.utils.crypto import constant_time_compare
 from rest_framework import status
 from rest_framework.permissions import BasePermission
@@ -165,8 +166,25 @@ class BotPedidoView(BotAPIView):
 
         itens = []
         for item in itens_brutos:
+            # O corpo vem do bot, que repassa o que a loja digitou no WhatsApp:
+            # item pode nao ser objeto, e codigo pode nao ser numero. Sem esta
+            # guarda dava AttributeError/ValueError e virava 500.
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": "Cada item precisa ter codigo e quantidade."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             codigo = item.get("codigo")
             quantidade = item.get("quantidade")
+
+            try:
+                codigo = int(codigo)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": f"Codigo de produto invalido: {codigo!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
             if not produto:
@@ -213,22 +231,38 @@ class BotPedidoConfirmarView(BotAPIView):
         if not loja:
             return self.erro_loja()
 
-        pedido = Pedido.objects.filter(id=numero, loja=loja).first()
-        if not pedido:
-            return Response(
-                {"error": f"Pedido {numero} nao encontrado para a sua loja."},
-                status=status.HTTP_404_NOT_FOUND,
+        # Tudo numa transacao com o pedido travado: o bot repete a chamada
+        # quando a rede falha, e sem o lock duas confirmacoes simultaneas
+        # passavam as duas pela guarda e somavam o estoque em dobro.
+        with transaction.atomic():
+            pedido = (
+                Pedido.objects.select_for_update()
+                .filter(id=numero, loja=loja)
+                .first()
             )
+            if not pedido:
+                return Response(
+                    {"error": f"Pedido {numero} nao encontrado para a sua loja."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        if pedido.status == Pedido.Status.ENTREGUE:
-            return Response({"numero": pedido.id, "status": pedido.status})
+            if pedido.status == Pedido.Status.ENTREGUE:
+                return Response({"numero": pedido.id, "status": pedido.status})
 
-        pedido.status = Pedido.Status.ENTREGUE
-        pedido.save(update_fields=["status", "updated_at"])
-        somar_itens_no_estoque(pedido)
-        notificar_estoques_baixos_do_pedido(
-            pedido, usuario_editor=loja.responsavel
-        )
+            if pedido.status != Pedido.Status.PENDENTE:
+                # Cancelado nao vira entregue: somaria no estoque uma ENTRADA
+                # que nunca aconteceu.
+                return Response(
+                    {"error": f"Pedido {numero} esta {pedido.status} e nao pode ser confirmado."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            pedido.status = Pedido.Status.ENTREGUE
+            pedido.save(update_fields=["status", "updated_at"])
+            somar_itens_no_estoque(pedido)
+            notificar_estoques_baixos_do_pedido(
+                pedido, usuario_editor=loja.responsavel
+            )
 
         return Response({"numero": pedido.id, "status": pedido.status})
 

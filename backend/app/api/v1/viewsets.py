@@ -1,7 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from datetime import datetime, time
@@ -12,6 +12,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import F, Q
 
 from app.models import (
@@ -19,7 +20,6 @@ from app.models import (
     Notificacao, PreferenciaNotificacao,
 )
 from app.notifications.tasks import (
-    enviar_email_confirmacao,
     enviar_email_definir_senha,
     validar_token_confirmacao,
 )
@@ -83,10 +83,26 @@ class RegistroRateThrottle(AnonRateThrottle):
     scope = "registro"
 
 
-class SenhaRateThrottle(AnonRateThrottle):
-    """Limita o pedido de link de senha: evita varredura de emails."""
+class SenhaRateThrottle(SimpleRateThrottle):
+    """Limita o pedido de link de senha pelo email ALVO, nao por quem pede.
+
+    Herdar de AnonRateThrottle nao servia: o get_cache_key dele devolve None
+    para requisicao autenticada, ou seja, qualquer conta logada podia inundar
+    a caixa de qualquer loja com links de redefinicao. Chavear pelo alvo poe o
+    teto onde o dano acontece e vale para anonimo e logado igualmente.
+    """
 
     scope = "senha"
+
+    def get_cache_key(self, request, view):
+        email = request.data.get("email")
+        if isinstance(email, str) and email.strip():
+            ident = email.strip().lower()
+        else:
+            # Sem email nao ha o que enviar; limita pela origem so para a rota
+            # nao ficar sem teto nenhum.
+            ident = self.get_ident(request)
+        return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
 # 🔹 Helper
@@ -342,19 +358,24 @@ class PedidoViewSet( viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        status_anterior = pedido.status
+        # Trava o pedido e faz tudo numa transacao: sem isso, dois cliques (ou
+        # duas abas) passavam os dois pela guarda de ENTREGUE e o estoque era
+        # somado em dobro. Mesma protecao que a confirmacao do bot usa.
+        with transaction.atomic():
+            pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
+            status_anterior = pedido.status
 
-        if status_anterior == Pedido.Status.ENTREGUE and status_novo == Pedido.Status.ENTREGUE:
-            serializer = self.get_serializer(pedido)
-            return Response(serializer.data)
+            if status_anterior == Pedido.Status.ENTREGUE and status_novo == Pedido.Status.ENTREGUE:
+                serializer = self.get_serializer(pedido)
+                return Response(serializer.data)
 
-        pedido.status = status_novo
-        pedido.save(update_fields=['status', 'updated_at'])
+            pedido.status = status_novo
+            pedido.save(update_fields=['status', 'updated_at'])
 
-        if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
-            somar_itens_no_estoque(pedido)
+            if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
+                somar_itens_no_estoque(pedido)
 
-        notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
+            notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
 
         serializer = self.get_serializer(pedido)
         return Response(serializer.data)
@@ -434,12 +455,18 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=['post'],
-        permission_classes=[AllowAny],  # Permitir deslogado criar conta
+        permission_classes=[AllowAny],
         throttle_classes=[RegistroRateThrottle],
     )
     def registrar(self, request):
+        """POST /api/v1/user/registrar/ — cria gerente. So gerente/admin usa.
+
+        Nao existe mais cadastro publico. Responsavel nao se cria a mao: cada
+        loja ganha o proprio login ao ser cadastrada, a partir do email dela.
+        O endpoint segue AllowAny para responder 403 com explicacao em vez do
+        401 seco do IsAuthenticated.
+        """
         data = request.data
-        id_loja = data.get('id_loja') # ID vindo do select do React
         tipo_usuario = data.get('tipo_usuario')
 
         requester_is_admin = bool(
@@ -448,44 +475,30 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
             and is_gerente_ou_admin(request.user)
         )
 
-        if tipo_usuario == 'gerente' and not requester_is_admin:
+        if not requester_is_admin:
             return Response(
-                {"error": "Apenas um gerente/admin autenticado pode cadastrar outro gerente."},
+                {"error": "Apenas um gerente/admin autenticado pode cadastrar usuarios."},
                 status=status.HTTP_403_FORBIDDEN
+            )
+
+        if tipo_usuario != 'gerente':
+            return Response(
+                {"error": (
+                    "So e possivel cadastrar gerente aqui. Cada loja recebe o "
+                    "proprio acesso quando e cadastrada, usando o e-mail dela."
+                )},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
-            user = serializer.save() # Cria o usuário
+            user = serializer.save()
 
-            # 1. Adicionar ao grupo correto
             from django.contrib.auth.models import Group
-            group_name = 'Gerente' if tipo_usuario == 'gerente' else 'Responsavel'
-            grupo = Group.objects.get(name=group_name)
-            user.groups.add(grupo)
-
-            # 2. Se for Responsável, vincula à loja
-            if group_name == 'Responsavel' and id_loja:
-                try:
-                    loja = Loja.objects.get(public_id=id_loja)
-                    # Se o seu model Loja tem o campo 'responsavel':
-                    loja.responsavel = user
-                    loja.save()
-                except Loja.DoesNotExist:
-                    return Response({"error": "Loja não encontrada"}, status=status.HTTP_400_BAD_REQUEST)
-
-            # 3. Cadastro publico exige confirmacao por email; conta criada por
-            # admin/gerente ja nasce ativa.
-            if not requester_is_admin:
-                user.is_active = False
-                user.save(update_fields=['is_active'])
-                enviar_email_confirmacao.delay(user.id)
+            user.groups.add(Group.objects.get(name='Gerente'))
 
             corpo = dict(serializer.data)
-            corpo['detail'] = (
-                'Conta criada. Enviamos um email de confirmacao — verifique sua caixa de entrada.'
-                if not requester_is_admin else 'Conta criada.'
-            )
+            corpo['detail'] = 'Conta criada.'
             return Response(corpo, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -20,6 +20,12 @@ def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None
         return
 
     if estoque.quantidade_atual > estoque.quantidade_minima:
+        # Recuperou: apaga o alerta do episodio que acabou. Sair sem apagar
+        # deixava o sininho mentindo — o EstoqueUpdateSerializer ate limpava,
+        # mas somar_itens_no_estoque (pedido entregue, inclusive pelo bot) nao
+        # passa por ele, entao justo o caminho que resolve a falta era o que
+        # nao limpava.
+        Notificacao.objects.filter(tipo="estoque_baixo", estoque=estoque).delete()
         return
 
     usuarios = []

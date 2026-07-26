@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SECRET_KEY: ci-nao-e-segredo
+      # Sem valor padrao no settings (host e URL de producao nao ficam no
+      # codigo), entao o CI precisa declarar as tres ou o Django nem sobe.
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+      CSRF_TRUSTED_ORIGINS: http://localhost:3000
       # DB_ENGINE ausente -> settings caem no sqlite (sem MySQL no CI)
     steps:
       - uses: actions/checkout@v4

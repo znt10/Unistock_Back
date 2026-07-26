@@ -13,6 +13,7 @@ class PedidoAPITestCase(APITestCase):
         # Criar grupos
         self.grupo_responsavel, _ = Group.objects.get_or_create(name='Responsavel')
         self.grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
+        self.grupo_admin, _ = Group.objects.get_or_create(name='Admin')
 
         # Usuário responsável
         self.responsavel = User.objects.create_user(
@@ -27,6 +28,13 @@ class PedidoAPITestCase(APITestCase):
             password='123'
         )
         self.gerente.groups.add(self.grupo_gerente)
+
+        # Usuário admin
+        self.admin = User.objects.create_user(
+            username='chefe@unistock.com',
+            password='123'
+        )
+        self.admin.groups.add(self.grupo_admin)
 
 
         self.produto = Produto.objects.create(
@@ -43,14 +51,17 @@ class PedidoAPITestCase(APITestCase):
 
 
 
-    def test_gerente_cadastra_outro_gerente_que_ja_entra(self):
-        """Unico cadastro que sobrou: gerente/admin criando gerente.
+    def test_admin_cadastra_gerente_que_ja_entra(self):
+        """Unico cadastro que sobrou: admin criando gerente.
 
         A conta nasce ativa — nao ha mais confirmacao por email, porque nao ha
         mais cadastro aberto para confirmar. Loja nao passa por aqui: ganha o
         proprio acesso quando e cadastrada.
+
+        Antes, gerente tambem podia criar outro gerente — agora e exclusivo
+        do admin (ver test_usuarios_admin.py).
         """
-        self.client.force_authenticate(user=self.gerente)
+        self.client.force_authenticate(user=self.admin)
         response = self.client.post("/api/v1/user/registrar/", {
             "email": "novo@email.com",
             "password": "SenhaForte#2026",

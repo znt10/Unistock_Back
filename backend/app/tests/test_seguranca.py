@@ -85,7 +85,10 @@ class NotificacaoPorFkTests(APITestCase):
         self.assertEqual(notifs.first().estoque, self.estoque)
 
     def test_movimentacoes_escopo_por_loja(self):
-        """Responsavel ve so movimentos das lojas dele; gerente ve tudo."""
+        """Responsavel ve so movimentos das lojas dele; admin ve tudo.
+
+        Gerente deixou de ver tudo sem restricao (mudanca intencional: agora
+        e escopado as proprias lojas, ver test_estoque_escopo.py)."""
         outro = User.objects.create_user(username='outro@email.com', password='123')
         outra_loja = Loja.objects.create(
             nome_loja='Loja Outra', cidade='Patos', endereco='Rua 2',
@@ -111,11 +114,11 @@ class NotificacaoPorFkTests(APITestCase):
         ids = [m['id'] for m in response.data['results']]
         self.assertEqual(ids, [str(minha.public_id)])
 
-        # Gerente: todas
-        gerente = User.objects.create_user(username='g@email.com', password='123')
-        grupo, _ = Group.objects.get_or_create(name='Gerente')
-        gerente.groups.add(grupo)
-        self.client.force_authenticate(gerente)
+        # Admin: todas
+        admin = User.objects.create_user(username='adm@email.com', password='123')
+        grupo, _ = Group.objects.get_or_create(name='Admin')
+        admin.groups.add(grupo)
+        self.client.force_authenticate(admin)
         response = self.client.get('/api/v1/movimentacoes/')
         self.assertEqual(len(response.data['results']), 2)
 

@@ -55,7 +55,7 @@ class RegistroNaoRoubaLojaTests(APITestCase):
     def test_gerente_nao_cria_responsavel_a_mao(self):
         """Responsavel nasce so pela loja. Cadastrar a mao voltaria ao modelo antigo."""
         admin = User.objects.create_user(username='chefe@unistock.com', password='Chefe#2026')
-        admin.groups.add(Group.objects.get_or_create(name='Gerente')[0])
+        admin.groups.add(Group.objects.get_or_create(name='Admin')[0])
         self.client.force_authenticate(user=admin)
 
         response = self.client.post(

@@ -133,6 +133,7 @@ class TrocarEmailDaLojaTests(APITestCase):
     def test_loja_que_ganha_email_depois_ganha_acesso(self):
         loja_sem = Loja.objects.create(
             nome_loja='Sem Email', cidade='Patos', endereco='Rua 2',
+            gerente=self.gerente,
         )
 
         with self.captureOnCommitCallbacks(execute=True):
@@ -166,6 +167,7 @@ class TrocarEmailDaLojaTests(APITestCase):
         """Sem login pra quebrar, continua sendo um estado valido."""
         loja_sem = Loja.objects.create(
             nome_loja='Sem Acesso', cidade='Patos', endereco='Rua 3',
+            gerente=self.gerente,
         )
 
         response = self.client.patch(

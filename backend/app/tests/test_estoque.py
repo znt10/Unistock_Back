@@ -8,7 +8,7 @@ from app.models import (
 
 
 class EstoqueBaixosTests(APITestCase):
-    """Painel de estoque baixo: /estoque/baixos/ (gerente ve todas as lojas)."""
+    """Painel de estoque baixo: /estoque/baixos/ (gerente ve as proprias lojas)."""
 
     def setUp(self):
         grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
@@ -18,10 +18,11 @@ class EstoqueBaixosTests(APITestCase):
 
         self.loja_a = Loja.objects.create(
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
-            responsavel=self.resp_a,
+            responsavel=self.resp_a, gerente=self.gerente,
         )
         self.loja_b = Loja.objects.create(
             nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
+            gerente=self.gerente,
         )
         coxinha = Produto.objects.create(
             nome_produto='Coxinha', categoria='SALGADOS_GDE',
@@ -82,7 +83,7 @@ class EstoqueIntegridadeTests(APITestCase):
 
         self.loja = Loja.objects.create(
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
-            responsavel=self.user,
+            responsavel=self.user, gerente=self.gerente,
         )
         self.produto = Produto.objects.create(
             nome_produto='Coxinha', categoria='SALGADOS_GDE',

@@ -46,6 +46,7 @@ class LojaSerializer(serializers.ModelSerializer):
     email_acesso = serializers.EmailField(
         source="responsavel.email", read_only=True, default=None
     )
+    gerente_nome = serializers.SerializerMethodField()
 
     class Meta:
         model = Loja
@@ -58,6 +59,8 @@ class LojaSerializer(serializers.ModelSerializer):
             "responsavel",
             "responsavel_nome",
             "email_acesso",
+            "gerente",
+            "gerente_nome",
             "ativo",
             "telefone_whatsapp",
             "email",
@@ -70,6 +73,22 @@ class LojaSerializer(serializers.ModelSerializer):
         if not acesso:
             return None
         return acesso.first_name or acesso.email or acesso.username
+
+    def get_gerente_nome(self, loja):
+        gerente = loja.gerente
+        if not gerente:
+            return None
+        return gerente.first_name or gerente.email or gerente.username
+
+    def validate_gerente(self, value):
+        # Quem PODE mexer neste campo e checado na view (perform_update),
+        # que responde 403 — aqui e so a regra de negocio (400): o valor tem
+        # que ser de fato um Gerente.
+        if value is not None and not value.groups.filter(name="Gerente").exists():
+            raise serializers.ValidationError(
+                "Este usuario nao e um gerente."
+            )
+        return value
 
     def validate_telefone_whatsapp(self, value):
         if not value:

@@ -82,7 +82,7 @@ class EstoqueIntegridadeTests(APITestCase):
 
         self.loja = Loja.objects.create(
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
-            responsavel=self.user,
+            responsavel=self.user, gerente=self.gerente,
         )
         self.produto = Produto.objects.create(
             nome_produto='Coxinha', categoria='SALGADOS_GDE',

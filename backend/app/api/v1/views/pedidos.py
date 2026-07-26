@@ -9,7 +9,8 @@ from rest_framework.response import Response
 from app.models import ItemPedido, Pedido
 from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
-    is_gerente_ou_admin,
+    is_admin,
+    is_gerente,
 )
 from app.services.pedidos import TransicaoInvalida, mudar_status
 from ..mixins import ResponsavelOuAdminMixin
@@ -31,8 +32,10 @@ class ItemPedidoViewSet(ResponsavelOuAdminMixin,viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        if is_gerente_ou_admin(user):
+        if is_admin(user):
             return ItemPedido.objects.all()
+        if is_gerente(user):
+            return ItemPedido.objects.filter(pedido__loja__gerente=user)
 
         # Mesma regra de tenancy do PedidoViewSet: escopo pela loja do usuario
         return ItemPedido.objects.filter(pedido__loja__responsavel=user)
@@ -57,8 +60,11 @@ class PedidoViewSet( viewsets.ModelViewSet):
         user = self.request.user
         queryset = Pedido.objects.all().order_by('-data_pedido')
 
-
-        if not is_gerente_ou_admin(user):
+        if is_admin(user):
+            pass
+        elif is_gerente(user):
+            queryset = queryset.filter(loja__gerente=user)
+        else:
             queryset = queryset.filter(loja__in=user.loja_set.all())
 
         status = self.request.query_params.get('status')

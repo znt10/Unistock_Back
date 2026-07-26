@@ -39,6 +39,7 @@ class TransicaoDeStatusTests(APITestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
+            gerente=self.gerente,
             telefone_whatsapp=TELEFONE_LOJA,
         )
         self.produto = Produto.objects.create(

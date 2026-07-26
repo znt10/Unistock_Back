@@ -122,6 +122,13 @@ class NotificacaoPorFkTests(APITestCase):
         response = self.client.get('/api/v1/movimentacoes/')
         self.assertEqual(len(response.data['results']), 2)
 
+        # Filtro por loja (tela de historico separada por loja no front)
+        response = self.client.get(
+            f'/api/v1/movimentacoes/?loja={self.loja.public_id}'
+        )
+        ids = [m['id'] for m in response.data['results']]
+        self.assertEqual(ids, [str(minha.public_id)])
+
     def test_renomear_produto_nao_quebra_dedup(self):
         notificar_estoque_baixo(self.estoque)
 

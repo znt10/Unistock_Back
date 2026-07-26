@@ -13,8 +13,31 @@ que os tres mudassem juntos.
 
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
+from app.models import Loja
+
 # Quem enxerga todas as lojas.
 GRUPOS_GERENCIA = ("Admin", "Gerente")
+
+
+def is_admin(user):
+    """True so para Admin de verdade (superuser ou grupo Admin) — sem Gerente.
+
+    Diferenca de is_gerente_ou_admin: esta e para os pontos onde Gerente NAO
+    pode agir como admin (criar outro gerente, ver todos os usuarios, mudar
+    o gerente de uma loja).
+    """
+    if not user or not user.is_authenticated:
+        return False
+
+    return user.is_superuser or user.groups.filter(name="Admin").exists()
+
+
+def is_gerente(user):
+    """True se o usuario e Gerente (independente de ter lojas atribuidas)."""
+    if not user or not user.is_authenticated:
+        return False
+
+    return user.groups.filter(name="Gerente").exists()
 
 
 def is_gerente_ou_admin(user):
@@ -26,13 +49,16 @@ def is_gerente_ou_admin(user):
     NAO olha is_active de proposito: quem barra conta desativada e o login.
     Mudar isso e decisao de produto, nao detalhe de implementacao.
     """
-    if not user or not user.is_authenticated:
-        return False
+    return is_admin(user) or is_gerente(user)
 
-    return (
-        user.is_superuser
-        or user.groups.filter(name__in=GRUPOS_GERENCIA).exists()
-    )
+
+def lojas_do_gerente(user):
+    """Lojas que este Gerente administra (Loja.gerente=user). Admin: todas."""
+    if is_admin(user):
+        return Loja.objects.all()
+    if is_gerente(user):
+        return Loja.objects.filter(gerente=user)
+    return Loja.objects.none()
 
 
 def is_responsavel(user):
@@ -73,7 +99,8 @@ class IsGerenteOrAdministradorOrResponsavel(BasePermission):
     no get_queryset de cada viewset, nao aqui; as duas pontas precisam ser
     lidas juntas.
 
-    Escrita: gerencia em qualquer loja, responsavel so no que e dele.
+    Escrita: Admin em qualquer loja; Gerente so nas lojas atribuidas a ele
+    (Loja.gerente); responsavel so na propria.
     """
 
     def has_permission(self, request, view):
@@ -93,8 +120,12 @@ class IsGerenteOrAdministradorOrResponsavel(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        if is_gerente_ou_admin(user):
+        if is_admin(user):
             return True
+
+        if is_gerente(user):
+            loja = obj if isinstance(obj, Loja) else getattr(obj, "loja", None)
+            return loja is not None and loja.gerente_id == user.id
 
         if is_responsavel(user):
             # Objeto com FK de loja (Estoque, Pedido): tem que ser de uma loja

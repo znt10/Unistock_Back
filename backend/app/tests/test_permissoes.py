@@ -157,6 +157,7 @@ class PermissaoResponsavelTests(TestCase):
         self.classe = IsGerenteOrAdministradorOrResponsavel()
 
         self.gerente = usuario("ger@email.com", "Gerente")
+        self.outro_gerente = usuario("outroger@email.com", "Gerente")
         self.responsavel = usuario("resp@email.com", "Responsavel")
         self.outro = usuario("outro@email.com", "Responsavel")
         self.sem_grupo = usuario("nada@email.com")
@@ -166,12 +167,14 @@ class PermissaoResponsavelTests(TestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
+            gerente=self.gerente,
         )
         self.loja_alheia = Loja.objects.create(
             nome_loja="Loja Sul",
             cidade="Patos",
             endereco="Rua B, 2",
             responsavel=self.outro,
+            gerente=self.outro_gerente,
         )
 
         produto = Produto.objects.create(
@@ -245,10 +248,38 @@ class PermissaoResponsavelTests(TestCase):
             )
         )
 
-    def test_gerente_escreve_em_qualquer_loja(self):
+    def test_gerente_escreve_no_estoque_da_propria_loja(self):
         self.assertTrue(
             self.classe.has_object_permission(
+                requisicao("patch", self.gerente), None, self.estoque_dele
+            )
+        )
+
+    def test_gerente_nao_escreve_no_estoque_de_loja_alheia(self):
+        """Mudanca intencional: gerente deixa de ser 'admin' para objetos.
+
+        Antes desta mudanca, is_gerente_ou_admin dava acesso total a
+        qualquer gerente em qualquer loja. Agora o gerente e escopado as
+        lojas que o Admin atribuiu a ele (Loja.gerente)."""
+        self.assertFalse(
+            self.classe.has_object_permission(
                 requisicao("patch", self.gerente), None, self.estoque_alheio
+            )
+        )
+
+    def test_admin_continua_escrevendo_em_qualquer_loja(self):
+        admin = usuario("admin@email.com", "Admin")
+        self.assertTrue(
+            self.classe.has_object_permission(
+                requisicao("patch", admin), None, self.estoque_alheio
+            )
+        )
+
+    def test_gerente_sem_loja_nenhuma_atribuida_nao_escreve_em_nenhuma(self):
+        gerente_orfao = usuario("orfao@email.com", "Gerente")
+        self.assertFalse(
+            self.classe.has_object_permission(
+                requisicao("patch", gerente_orfao), None, self.estoque_dele
             )
         )
 

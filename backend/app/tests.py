@@ -436,7 +436,7 @@ class EstoqueIntegridadeTests(APITestCase):
             )
 
     def test_entrega_de_pedido_registra_movimentacao_entrada(self):
-        from app.api.v1.viewsets import somar_itens_no_estoque
+        from app.services.pedidos import somar_itens_no_estoque
 
         pedido = Pedido.objects.create(responsavel=self.user, loja=self.loja)
         ItemPedido.objects.create(

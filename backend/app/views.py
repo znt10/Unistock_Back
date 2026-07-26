@@ -17,20 +17,12 @@ from datetime import date
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest
 
 from app.models import Loja
-from app.permissions import IsGerenteOrAdministrador
+from app.permissions import IsGerenteOrAdministrador, get_user_group_name
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 
 User = get_user_model()
 
 permission_classes = [IsAuthenticated]
-
-
-def get_user_group_name(user):
-    if user.is_superuser or user.groups.filter(name="Admin").exists():
-        return "Admin"
-
-    group = user.groups.first()
-    return group.name if group else None
 
 
 class RelatorioPdfView(APIView):

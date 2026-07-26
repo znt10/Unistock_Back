@@ -12,7 +12,6 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.db.models import F, Q
 
 from app.models import (
@@ -42,36 +41,14 @@ from .serializers import (
     NotificacaoSerializer,
     VendaCreateSerializer,
 )
-from app.permissions import IsGerenteOrAdministrador, IsGerenteOrAdministradorOrResponsavel
-from app.notifications import notificar_estoques_baixos_do_pedido, notificar_estoque_baixo
+from app.permissions import (
+    IsGerenteOrAdministrador,
+    IsGerenteOrAdministradorOrResponsavel,
+    get_user_group_name,
+    is_gerente_ou_admin,
+)
+from app.services.pedidos import TransicaoInvalida, mudar_status
 from rest_framework.decorators import action
-
-def somar_itens_no_estoque(pedido):
-    """Soma os itens do pedido no estoque da loja (pedido ENTREGUE).
-
-    Funcao de modulo para ser reusada pelo site (atualizar_status) e pelo
-    bot de WhatsApp (confirmacao de recebimento).
-    """
-    for item in pedido.itens.select_related('produto').all():
-        estoque, _ = Estoque.objects.get_or_create(
-            loja=pedido.loja,
-            produto=item.produto,
-            defaults={
-                'quantidade_atual': 0,
-                'quantidade_minima': item.produto.estoque_minimo_sugerido,
-            }
-        )
-        estoque.quantidade_atual += item.quantidade
-        estoque.save(update_fields=['quantidade_atual', 'updated_at'])
-        MovimentacaoEstoque.objects.create(
-            tipo=MovimentacaoEstoque.Tipo.ENTRADA,
-            produto=item.produto,
-            loja_destino=pedido.loja,
-            quantidade=item.quantidade,
-            usuario=pedido.responsavel,
-        )
-        notificar_estoque_baixo(estoque)
-
 
 class RegistroRateThrottle(AnonRateThrottle):
     """Limita o cadastro publico (anonimo) usando a taxa 'registro'.
@@ -105,23 +82,6 @@ class SenhaRateThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
-# 🔹 Helper
-def is_gerente_ou_admin(user):
-    return (
-        user.is_superuser
-        or user.groups.filter(name='Admin').exists()
-        or user.groups.filter(name='Gerente').exists()
-    )
-
-
-def get_user_group_name(user):
-    if user.is_superuser or user.groups.filter(name='Admin').exists():
-        return 'Admin'
-
-    group = user.groups.first()
-    return group.name if group else None
-
-    
 # 🔹 LOJA
 class LojaViewSet(viewsets.ModelViewSet):
     queryset = Loja.objects.all().order_by('id')
@@ -358,27 +318,18 @@ class PedidoViewSet( viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Trava o pedido e faz tudo numa transacao: sem isso, dois cliques (ou
-        # duas abas) passavam os dois pela guarda de ENTREGUE e o estoque era
-        # somado em dobro. Mesma protecao que a confirmacao do bot usa.
-        with transaction.atomic():
-            pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
-            status_anterior = pedido.status
+        # A regra (quais transicoes valem, lock, soma no estoque) vive em
+        # services/pedidos.py, que o bot tambem usa. Aqui so se traduz HTTP.
+        try:
+            pedido = mudar_status(
+                pedido.pk, status_novo, usuario_editor=request.user
+            )
+        except TransicaoInvalida as erro:
+            return Response(
+                {"status": str(erro)}, status=status.HTTP_409_CONFLICT
+            )
 
-            if status_anterior == Pedido.Status.ENTREGUE and status_novo == Pedido.Status.ENTREGUE:
-                serializer = self.get_serializer(pedido)
-                return Response(serializer.data)
-
-            pedido.status = status_novo
-            pedido.save(update_fields=['status', 'updated_at'])
-
-            if status_novo == Pedido.Status.ENTREGUE and status_anterior != Pedido.Status.ENTREGUE:
-                somar_itens_no_estoque(pedido)
-
-            notificar_estoques_baixos_do_pedido(pedido, usuario_editor=request.user)
-
-        serializer = self.get_serializer(pedido)
-        return Response(serializer.data)
+        return Response(self.get_serializer(pedido).data)
 
 
 class VendaViewSet(viewsets.GenericViewSet):

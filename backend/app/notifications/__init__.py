@@ -4,17 +4,6 @@ from django.db.models import F
 from app.models import Estoque, Notificacao, Pedido
 
 
-def _is_gerente_ou_admin(user):
-    if not user or not user.is_authenticated:
-        return False
-
-    return (
-        user.is_superuser
-        or user.groups.filter(name="Admin").exists()
-        or user.groups.filter(name="Gerente").exists()
-    )
-
-
 def notificar_estoque_baixo(estoque: Estoque, usuario_editor: User | None = None):
     if estoque.quantidade_minima <= 0:
         return

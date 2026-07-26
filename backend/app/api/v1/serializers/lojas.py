@@ -1,6 +1,7 @@
 import re
 
 from django.contrib.auth.models import Group, User
+from django.db import transaction
 from rest_framework import serializers
 
 from app.models import Loja
@@ -120,11 +121,16 @@ class LojaSerializer(serializers.ModelSerializer):
 
         return value
 
+    # A loja e o acesso dela nascem juntos ou nao nascem: sem isso, um erro ao
+    # criar o User deixava a Loja gravada sem acesso — e com o email ja tomado,
+    # nem recadastrar dava.
+    @transaction.atomic
     def create(self, validated_data):
         loja = super().create(validated_data)
         criar_acesso_da_loja(loja)
         return loja
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         email_anterior = instance.email
         loja = super().update(instance, validated_data)

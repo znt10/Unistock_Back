@@ -535,6 +535,62 @@ class ConverterResponsaveisTests(TestCase):
         self.assertEqual(convertidos, 0)
         self.assertEqual(pulados, [])
 
+    def test_duas_lojas_com_o_mesmo_email_nao_se_atropelam(self):
+        """A 2a loja com o mesmo email nao pode roubar o login que a 1a ganhou.
+
+        O exclude(pk=acesso.pk) so protege contra colidir com OUTRO usuario ja
+        existente. Depois que a 1a loja converte, a 2a chega, o unico usuario
+        com aquele username e o dela mesma pelo exclude... e ela sobrescreve.
+        A migracao nao tem volta (reverter e pass), entao o estrago fica.
+        """
+        from app.migracoes_loja_login import converter_responsaveis
+
+        um = User.objects.create_user(username='um@gmail.com', password='123')
+        dois = User.objects.create_user(username='dois@gmail.com', password='123')
+        Loja.objects.create(
+            nome_loja='Primeira', cidade='Patos', endereco='Rua 1',
+            email='mesma@unistock.com', responsavel=um,
+        )
+        Loja.objects.create(
+            nome_loja='Segunda', cidade='Patos', endereco='Rua 2',
+            email='mesma@unistock.com', responsavel=dois,
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        um.refresh_from_db()
+        dois.refresh_from_db()
+        self.assertEqual(convertidos, 1)
+        self.assertEqual(len(pulados), 1)
+        self.assertEqual(um.username, 'mesma@unistock.com')
+        self.assertEqual(dois.username, 'dois@gmail.com')  # intacto
+
+    def test_mesma_pessoa_em_duas_lojas_converte_uma_so(self):
+        """Uma pessoa podia ser responsavel por varias lojas (a FK nao e unica).
+
+        Sem controlar quem ja foi convertido, a 2a loja reescreve o username que
+        a 1a acabou de definir: a 1a loja fica com um login que nao e o email
+        dela, e ninguem percebe porque a migracao nao tem volta.
+        """
+        from app.migracoes_loja_login import converter_responsaveis
+
+        pessoa = User.objects.create_user(username='ana@gmail.com', password='123')
+        Loja.objects.create(
+            nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
+            email='a@unistock.com', responsavel=pessoa,
+        )
+        Loja.objects.create(
+            nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
+            email='b@unistock.com', responsavel=pessoa,
+        )
+
+        convertidos, pulados = converter_responsaveis(User, Loja)
+
+        pessoa.refresh_from_db()
+        self.assertEqual(convertidos, 1)
+        self.assertEqual(pessoa.username, 'a@unistock.com')
+        self.assertEqual(len(pulados), 1)  # a segunda precisa de acesso proprio
+
 
 class RegistroNaoRoubaLojaTests(APITestCase):
     """O cadastro publico nao pode reescrever o acesso de uma loja.
@@ -635,3 +691,39 @@ class ThrottleEsqueciSenhaTests(APITestCase):
 
         self.assertEqual(codigos[0], 200)
         self.assertEqual(codigos[-1], 429)  # taxa "senha" e 10/hour
+
+
+class CriarLojaEhAtomicoTests(APITestCase):
+    """Loja e acesso nascem juntos ou nao nascem.
+
+    LojaSerializer.create commitava a Loja e so depois chamava
+    criar_acesso_da_loja, numa transacao separada. Se a criacao do User
+    estourasse, a Loja ficava gravada sem acesso — e como o email dela ja
+    estava tomado, nem dava pra recadastrar.
+    """
+
+    def setUp(self):
+        self.gerente = User.objects.create_user(
+            username='chefe@unistock.com', password='Chefe#2026',
+        )
+        self.gerente.groups.add(Group.objects.get_or_create(name='Gerente')[0])
+        self.client.force_authenticate(user=self.gerente)
+
+    def test_falha_ao_criar_o_acesso_nao_deixa_loja_orfa(self):
+        from unittest.mock import patch
+
+        with patch(
+            'app.api.v1.serializers.lojas.User.objects.create',
+            side_effect=Exception('banco caiu no meio'),
+        ):
+            with self.assertRaises(Exception):
+                self.client.post(
+                    '/api/v1/lojas/',
+                    {
+                        'nome_loja': 'Orfa', 'cidade': 'Patos',
+                        'endereco': 'Rua 1', 'email': 'orfa@unistock.com',
+                    },
+                    format='json',
+                )
+
+        self.assertFalse(Loja.objects.filter(email='orfa@unistock.com').exists())

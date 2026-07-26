@@ -8,6 +8,8 @@ from rest_framework.response import Response
 from app.models import Estoque, Loja, MovimentacaoEstoque
 from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
+    is_admin,
+    is_gerente,
     is_gerente_ou_admin,
 )
 from ..serializers import (
@@ -40,8 +42,10 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = Estoque.objects.all()
 
-        if is_gerente_ou_admin(user):
+        if is_admin(user):
             return queryset
+        if is_gerente(user):
+            return queryset.filter(loja__gerente=user)
 
         return queryset.filter(loja__responsavel=user)
 
@@ -59,7 +63,11 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         return Response(EstoqueBaixoSerializer(estoques, many=True).data)
 
     def _validar_loja_do_responsavel(self, user, loja):
-        if is_gerente_ou_admin(user):
+        if is_admin(user):
+            return
+        if is_gerente(user):
+            if not loja or loja.gerente_id != user.id:
+                raise PermissionDenied("Voce so pode editar o estoque das suas lojas.")
             return
 
         if not loja or loja.responsavel_id != user.id:
@@ -97,7 +105,10 @@ class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         user = self.request.user
-        if not is_gerente_ou_admin(user):
+        if is_gerente(user) and not is_admin(user):
+            minhas = Loja.objects.filter(gerente=user)
+            qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
+        elif not is_gerente_ou_admin(user):
             minhas = Loja.objects.filter(responsavel=user)
             qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
 

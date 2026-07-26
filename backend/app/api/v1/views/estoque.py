@@ -56,8 +56,8 @@ class EstoqueViewSet(viewsets.ModelViewSet):
     def baixos(self, request):
         """Produtos no/abaixo do minimo, no escopo do usuario.
 
-        Gerente/admin ve todas as lojas (visao centralizada); responsavel ve
-        so as dele — o escopo ja vem do get_queryset.
+        Admin ve todas as lojas; gerente ve so as suas; responsavel ve so a
+        dele — o escopo ja vem do get_queryset.
         """
         estoques = self.get_queryset().baixos()
         return Response(EstoqueBaixoSerializer(estoques, many=True).data)
@@ -115,4 +115,11 @@ class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
         tipo = self.request.query_params.get('tipo')
         if tipo:
             qs = qs.filter(tipo=tipo)
+
+        loja = self.request.query_params.get('loja')
+        if loja:
+            qs = qs.filter(
+                Q(loja_origem__public_id=loja) | Q(loja_destino__public_id=loja)
+            )
+
         return qs

@@ -534,3 +534,104 @@ class ConverterResponsaveisTests(TestCase):
 
         self.assertEqual(convertidos, 0)
         self.assertEqual(pulados, [])
+
+
+class RegistroNaoRoubaLojaTests(APITestCase):
+    """O cadastro publico nao pode reescrever o acesso de uma loja.
+
+    /user/registrar/ e AllowAny. Antes, mandar tipo_usuario=responsavel com o
+    id_loja sobrescrevia Loja.responsavel: a loja perdia o proprio login e
+    quem cadastrou passava a enxergar o estoque dela.
+    """
+
+    def setUp(self):
+        self.loja = Loja.objects.create(
+            nome_loja='Alvo', cidade='Patos', endereco='Rua 1',
+            email='alvo@unistock.com',
+        )
+        from app.api.v1.serializers.lojas import criar_acesso_da_loja
+        self.acesso = criar_acesso_da_loja(self.loja)
+
+    def test_cadastro_anonimo_nao_troca_o_responsavel_da_loja(self):
+        response = self.client.post(
+            '/api/v1/user/registrar/',
+            {
+                'username': 'invasor@email.com',
+                'email': 'invasor@email.com',
+                'password': 'SenhaForte#2026',
+                'tipo_usuario': 'responsavel',
+                'id_loja': str(self.loja.public_id),
+            },
+            format='json',
+        )
+
+        self.loja.refresh_from_db()
+        self.assertEqual(self.loja.responsavel_id, self.acesso.id)
+        self.assertNotEqual(response.status_code, 500)
+
+    def test_anonimo_nao_cadastra_ninguem(self):
+        response = self.client.post(
+            '/api/v1/user/registrar/',
+            {
+                'username': 'qualquer@email.com', 'email': 'qualquer@email.com',
+                'password': 'SenhaForte#2026', 'tipo_usuario': 'responsavel',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username='qualquer@email.com').exists())
+
+    def test_gerente_nao_cria_responsavel_a_mao(self):
+        """Responsavel nasce so pela loja. Cadastrar a mao voltaria ao modelo antigo."""
+        admin = User.objects.create_user(username='chefe@unistock.com', password='Chefe#2026')
+        admin.groups.add(Group.objects.get_or_create(name='Gerente')[0])
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            '/api/v1/user/registrar/',
+            {
+                'username': 'novo@email.com', 'email': 'novo@email.com',
+                'password': 'SenhaForte#2026', 'tipo_usuario': 'responsavel',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.filter(username='novo@email.com').exists())
+
+
+class ThrottleEsqueciSenhaTests(APITestCase):
+    """O limite tem que valer para quem esta logado tambem.
+
+    SenhaRateThrottle herdava de AnonRateThrottle, cujo get_cache_key devolve
+    None para requisicao autenticada: nao limitava nada. Uma conta qualquer
+    podia encher a caixa de outra loja de links de redefinicao.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()  # o historico do throttle vaza entre testes
+        self.alvo = User.objects.create_user(
+            username='alvo@unistock.com', email='alvo@unistock.com',
+            password='qualquer-123',
+        )
+        self.logado = User.objects.create_user(
+            username='logado@unistock.com', email='logado@unistock.com',
+            password='qualquer-123',
+        )
+
+    def test_conta_logada_tambem_esbarra_no_limite(self):
+        self.client.force_authenticate(user=self.logado)
+
+        codigos = [
+            self.client.post(
+                '/api/v1/user/esqueci-senha/',
+                {'email': 'alvo@unistock.com'}, format='json',
+            ).status_code
+            for _ in range(11)
+        ]
+
+        self.assertEqual(codigos[0], 200)
+        self.assertEqual(codigos[-1], 429)  # taxa "senha" e 10/hour

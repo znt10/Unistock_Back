@@ -1,11 +1,15 @@
 """Tasks Celery de notificacao (rodam no worker; sincronas nos testes)."""
 
+import logging
+
 from celery import shared_task
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core import signing
 
 from .channels import despachar
+
+logger = logging.getLogger(__name__)
 
 SALT_CONFIRMACAO = "unistock-confirmacao-conta"
 VALIDADE_TOKEN_SEGUNDOS = 60 * 60 * 24 * 3  # 3 dias
@@ -111,21 +115,27 @@ def enviar_digest_lojas():
     for loja, itens in por_loja.items():
         if not loja.email:
             continue  # sem email cadastrado: entra so no combinado do gerente
-        pdf = gerar_estoque_baixo_pdf(
-            itens, titulo=loja.nome_loja, subtitulo=f"Resumo de {data_br}"
-        )
-        _enviar_pdf(
-            [loja.email],
-            f"Estoque baixo — {loja.nome_loja} ({data_br})",
-            (
-                f"Bom dia!\n\nSegue em anexo a lista de produtos abaixo do "
-                f"estoque minimo na loja {loja.nome_loja}.\n\n"
-                "Acesse o Unistock para repor."
-            ),
-            f"estoque_baixo_{sufixo_arquivo}.pdf",
-            pdf,
-        )
-        enviados += 1
+        # Um SMTP recusado nao pode derrubar o digest do dia inteiro: sem isso,
+        # a primeira loja com problema cancelava as seguintes e todos os
+        # gerentes.
+        try:
+            pdf = gerar_estoque_baixo_pdf(
+                itens, titulo=loja.nome_loja, subtitulo=f"Resumo de {data_br}"
+            )
+            _enviar_pdf(
+                [loja.email],
+                f"Estoque baixo — {loja.nome_loja} ({data_br})",
+                (
+                    f"Bom dia!\n\nSegue em anexo a lista de produtos abaixo do "
+                    f"estoque minimo na loja {loja.nome_loja}.\n\n"
+                    "Acesse o Unistock para repor."
+                ),
+                f"estoque_baixo_{sufixo_arquivo}.pdf",
+                pdf,
+            )
+            enviados += 1
+        except Exception:
+            logger.exception("Falha no digest da loja %s", loja.nome_loja)
 
     # Um PDF combinado (todas as lojas) para cada gerente/admin. Aqui o
     # destinatario e uma pessoa, entao vale a preferencia de email dela.
@@ -142,17 +152,20 @@ def enviar_digest_lojas():
             baixos, titulo="Todas as lojas", subtitulo=f"Resumo de {data_br}"
         )
         for gerente in gerentes:
-            _enviar_pdf(
-                [gerente.email],
-                f"Estoque baixo — todas as lojas ({data_br})",
-                (
-                    "Bom dia!\n\nSegue em anexo a lista de produtos abaixo do "
-                    "estoque minimo em todas as lojas.\n\n"
-                    "Acesse o Unistock para repor."
-                ),
-                f"estoque_baixo_todas_lojas_{sufixo_arquivo}.pdf",
-                pdf_geral,
-            )
-            enviados += 1
+            try:
+                _enviar_pdf(
+                    [gerente.email],
+                    f"Estoque baixo — todas as lojas ({data_br})",
+                    (
+                        "Bom dia!\n\nSegue em anexo a lista de produtos abaixo do "
+                        "estoque minimo em todas as lojas.\n\n"
+                        "Acesse o Unistock para repor."
+                    ),
+                    f"estoque_baixo_todas_lojas_{sufixo_arquivo}.pdf",
+                    pdf_geral,
+                )
+                enviados += 1
+            except Exception:
+                logger.exception("Falha no digest do gerente %s", gerente.email)
 
     return enviados

@@ -166,8 +166,25 @@ class BotPedidoView(BotAPIView):
 
         itens = []
         for item in itens_brutos:
+            # O corpo vem do bot, que repassa o que a loja digitou no WhatsApp:
+            # item pode nao ser objeto, e codigo pode nao ser numero. Sem esta
+            # guarda dava AttributeError/ValueError e virava 500.
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": "Cada item precisa ter codigo e quantidade."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             codigo = item.get("codigo")
             quantidade = item.get("quantidade")
+
+            try:
+                codigo = int(codigo)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": f"Codigo de produto invalido: {codigo!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
             if not produto:

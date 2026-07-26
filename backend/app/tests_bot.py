@@ -192,6 +192,18 @@ class BotApiTests(APITestCase):
         estoque.refresh_from_db()
         self.assertEqual(estoque.quantidade_atual, 3)
 
+    def test_item_malformado_da_400_e_nao_500(self):
+        """O corpo vem do que a loja digitou no WhatsApp: nao da pra confiar."""
+        for itens in ([["nao sou objeto"]], [[{"codigo": "abc", "quantidade": 1}]]):
+            with self.subTest(itens=itens):
+                response = self.client.post(
+                    "/api/v1/bot/pedido/",
+                    {"telefone": TELEFONE_LOJA, "itens": itens[0]},
+                    format="json",
+                    **HEADERS,
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+
     def test_confirmar_pedido_cancelado_e_recusado(self):
         """A guarda so olhava ENTREGUE: um pedido CANCELADO virava entregue e
         entrava no estoque como uma ENTRADA que nunca aconteceu."""

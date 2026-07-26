@@ -42,7 +42,12 @@ from .serializers import (
     NotificacaoSerializer,
     VendaCreateSerializer,
 )
-from app.permissions import IsGerenteOrAdministrador, IsGerenteOrAdministradorOrResponsavel
+from app.permissions import (
+    IsGerenteOrAdministrador,
+    IsGerenteOrAdministradorOrResponsavel,
+    get_user_group_name,
+    is_gerente_ou_admin,
+)
 from app.notifications import notificar_estoques_baixos_do_pedido, notificar_estoque_baixo
 from rest_framework.decorators import action
 
@@ -105,23 +110,6 @@ class SenhaRateThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
-# 🔹 Helper
-def is_gerente_ou_admin(user):
-    return (
-        user.is_superuser
-        or user.groups.filter(name='Admin').exists()
-        or user.groups.filter(name='Gerente').exists()
-    )
-
-
-def get_user_group_name(user):
-    if user.is_superuser or user.groups.filter(name='Admin').exists():
-        return 'Admin'
-
-    group = user.groups.first()
-    return group.name if group else None
-
-    
 # 🔹 LOJA
 class LojaViewSet(viewsets.ModelViewSet):
     queryset = Loja.objects.all().order_by('id')

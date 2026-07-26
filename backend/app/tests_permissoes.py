@@ -1,34 +1,31 @@
-"""Trava o comportamento atual das regras de permissao duplicadas.
+"""Trava o comportamento das regras de acesso, agora unificadas.
 
-Hoje a pergunta "essa pessoa e gerente ou admin?" esta escrita em TRES lugares
-e "qual o papel dela?" em DOIS:
+Escritos ANTES do refactor, quando "essa pessoa e gerente ou admin?" estava em
+tres copias (permissions.py, api/v1/viewsets.py, notifications/__init__.py) e
+"qual o papel dela?" em duas (views.py, api/v1/viewsets.py). O papel deles era
+registrar o que cada copia respondia, para que a unificacao nao mudasse regra
+de acesso sem ninguem notar.
 
-    app/permissions.py               IsGerenteOrAdministrador
-    app/api/v1/viewsets.py:109       is_gerente_ou_admin
-    app/notifications/__init__.py:7  _is_gerente_ou_admin
+Hoje a regra vive so em app/permissions.py. Os testes seguem valendo por dois
+motivos: eles descrevem o acesso que o sistema concede (que continua sendo o
+mesmo de antes), e barram alguem reintroduzir uma copia local no futuro.
 
-    app/views.py:28                  get_user_group_name
-    app/api/v1/viewsets.py:117       get_user_group_name
-
-Estes testes nao dizem o que a regra DEVERIA ser: eles registram o que cada
-copia responde HOJE, incluindo onde elas divergem de proposito e onde divergem
-por acidente. Sao rede de seguranca para a unificacao.
-
-Se um destes ficar vermelho durante o refactor, o refactor mudou regra de
-acesso. Nesse caso a pergunta certa nao e "conserta o teste", e sim "essa
-mudanca de acesso era intencional?".
+Se um destes ficar vermelho, a pergunta certa nao e "conserta o teste", e sim
+"essa mudanca de acesso era intencional?".
 """
 
 from django.contrib.auth.models import AnonymousUser, Group, User
 from django.test import RequestFactory, TestCase
 
+from app import notifications
 from app.api.v1.viewsets import get_user_group_name as papel_do_viewsets
-from app.api.v1.viewsets import is_gerente_ou_admin
+from app.api.v1.viewsets import is_gerente_ou_admin as regra_do_viewsets
 from app.models import Estoque, Loja, Produto
-from app.notifications import _is_gerente_ou_admin
 from app.permissions import (
     IsGerenteOrAdministrador,
     IsGerenteOrAdministradorOrResponsavel,
+    get_user_group_name,
+    is_gerente_ou_admin,
 )
 from app.views import get_user_group_name as papel_das_views
 
@@ -52,7 +49,7 @@ def requisicao(metodo, user):
 
 
 class RegraGerenteOuAdminTests(TestCase):
-    """As tres copias respondem a mesma pergunta. Devem concordar sempre."""
+    """Todos os pontos de chamada respondem a mesma pergunta, igual."""
 
     def setUp(self):
         criar_grupos()
@@ -65,16 +62,28 @@ class RegraGerenteOuAdminTests(TestCase):
         self.sem_grupo = usuario("nada@email.com")
 
     def implementacoes(self, user):
-        """As tres copias, cada uma na sua interface, para o mesmo usuario."""
+        """Cada ponto de chamada, na sua interface, para o mesmo usuario."""
         return {
-            "viewsets.is_gerente_ou_admin": is_gerente_ou_admin(user),
-            "notifications._is_gerente_ou_admin": _is_gerente_ou_admin(user),
+            "permissions.is_gerente_ou_admin": is_gerente_ou_admin(user),
+            "viewsets.is_gerente_ou_admin": regra_do_viewsets(user),
             "permissions.IsGerenteOrAdministrador": (
                 IsGerenteOrAdministrador().has_permission(
                     requisicao("get", user), None
                 )
             ),
         }
+
+    def test_existe_uma_implementacao_so(self):
+        """O ponto do refactor: os call sites resolvem para a MESMA funcao.
+
+        Concordar por coincidencia (duas copias com o mesmo texto) nao basta —
+        foi assim que elas divergiram da primeira vez. Aqui a exigencia e
+        identidade, entao reintroduzir uma copia local fica vermelho na hora.
+        """
+        self.assertIs(regra_do_viewsets, is_gerente_ou_admin)
+        self.assertIs(papel_do_viewsets, get_user_group_name)
+        self.assertIs(papel_das_views, get_user_group_name)
+        self.assertFalse(hasattr(notifications, "_is_gerente_ou_admin"))
 
     def test_as_tres_copias_concordam(self):
         casos = [
@@ -118,18 +127,20 @@ class RegraGerenteOuAdminTests(TestCase):
             with self.subTest(implementacao=nome):
                 self.assertTrue(resultado)
 
-    def test_divergencia_conhecida_usuario_none(self):
-        """A copia de notifications aceita None; a de viewsets estoura.
+    def test_usuario_none_devolve_false_em_vez_de_estourar(self):
+        """Divergencia que existia entre as copias, resolvida pela mais segura.
 
-        Nao e alcancavel pela API (request.user nunca e None), mas o digest
-        chama a versao de notifications fora de qualquer request. Se a
-        unificacao adotar a versao SEM guarda, o digest quebra em producao e
-        os testes de API nao pegam.
+        Antes: a copia de notifications devolvia False para None, a de
+        viewsets estourava AttributeError. Nao e alcancavel pela API
+        (request.user nunca e None), mas ha chamada fora de request — o digest
+        das 7h — onde nao existe usuario garantido.
+
+        A unificacao ficou com a versao COM guarda: None vira negativa, nao
+        500. Adotar a outra teria quebrado o digest em producao sem quebrar
+        nenhum teste de API.
         """
-        self.assertFalse(_is_gerente_ou_admin(None))
-
-        with self.assertRaises(AttributeError):
-            is_gerente_ou_admin(None)
+        self.assertFalse(is_gerente_ou_admin(None))
+        self.assertFalse(regra_do_viewsets(None))
 
 
 class PermissaoResponsavelTests(TestCase):
@@ -257,7 +268,7 @@ class PermissaoResponsavelTests(TestCase):
 
 
 class PapelDoUsuarioTests(TestCase):
-    """get_user_group_name existe identico em views.py e viewsets.py."""
+    """get_user_group_name: uma definicao, importada por views.py e viewsets.py."""
 
     def setUp(self):
         criar_grupos()

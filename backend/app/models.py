@@ -23,6 +23,16 @@ class Loja(BaseModel):
     endereco = models.CharField(max_length=255)
     ativo = models.BooleanField(default=True)
     responsavel = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    # Gerente "dono" da loja: quem administra ela no dashboard do Admin.
+    # Nullable porque a loja pode nascer sem gerente atribuido ainda — quem
+    # atribui e o Admin, depois da loja existir.
+    gerente = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lojas_gerenciadas",
+    )
     # Numero de WhatsApp DA LOJA (nao do responsavel): e por ele que o bot
     # identifica de qual loja veio o pedido. Apenas digitos.
     telefone_whatsapp = models.CharField(

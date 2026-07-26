@@ -14,7 +14,6 @@ from datetime import date
 from types import SimpleNamespace
 
 from django.conf import settings
-from django.db import transaction
 from django.utils.crypto import constant_time_compare
 from rest_framework import status
 from rest_framework.permissions import BasePermission
@@ -22,10 +21,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from app.models import Loja, Pedido, Produto
-from app.notifications import notificar_estoques_baixos_do_pedido
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
+from app.services.pedidos import TransicaoInvalida, mudar_status
 from .serializers import PedidoCreateSerializer
-from .viewsets import somar_itens_no_estoque
 
 
 def normalizar_telefone(valor):
@@ -231,37 +229,23 @@ class BotPedidoConfirmarView(BotAPIView):
         if not loja:
             return self.erro_loja()
 
-        # Tudo numa transacao com o pedido travado: o bot repete a chamada
-        # quando a rede falha, e sem o lock duas confirmacoes simultaneas
-        # passavam as duas pela guarda e somavam o estoque em dobro.
-        with transaction.atomic():
-            pedido = (
-                Pedido.objects.select_for_update()
-                .filter(id=numero, loja=loja)
-                .first()
+        # Leitura so para distinguir 404 de 409; o trabalho de verdade e feito
+        # em mudar_status, que re-busca o pedido ja com o lock.
+        if not Pedido.objects.filter(id=numero, loja=loja).exists():
+            return Response(
+                {"error": f"Pedido {numero} nao encontrado para a sua loja."},
+                status=status.HTTP_404_NOT_FOUND,
             )
-            if not pedido:
-                return Response(
-                    {"error": f"Pedido {numero} nao encontrado para a sua loja."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
 
-            if pedido.status == Pedido.Status.ENTREGUE:
-                return Response({"numero": pedido.id, "status": pedido.status})
-
-            if pedido.status != Pedido.Status.PENDENTE:
-                # Cancelado nao vira entregue: somaria no estoque uma ENTRADA
-                # que nunca aconteceu.
-                return Response(
-                    {"error": f"Pedido {numero} esta {pedido.status} e nao pode ser confirmado."},
-                    status=status.HTTP_409_CONFLICT,
-                )
-
-            pedido.status = Pedido.Status.ENTREGUE
-            pedido.save(update_fields=["status", "updated_at"])
-            somar_itens_no_estoque(pedido)
-            notificar_estoques_baixos_do_pedido(
-                pedido, usuario_editor=loja.responsavel
+        try:
+            pedido = mudar_status(
+                numero,
+                Pedido.Status.ENTREGUE,
+                usuario_editor=loja.responsavel,
+            )
+        except TransicaoInvalida as erro:
+            return Response(
+                {"error": str(erro)}, status=status.HTTP_409_CONFLICT
             )
 
         return Response({"numero": pedido.id, "status": pedido.status})

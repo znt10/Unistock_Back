@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -13,17 +14,30 @@ from app.notifications.tasks import (
     validar_token_confirmacao,
 )
 from app.notifications.tokens import validar_token_senha
-from app.permissions import get_user_group_name, is_gerente_ou_admin
-from ..mixins import UserOuAdminMixin
+from app.permissions import get_user_group_name, is_admin, is_gerente
 from ..serializers import UsuarioSerializer
 from ..throttles import RegistroRateThrottle, SenhaRateThrottle
 
 
 # 🔹 USUÁRIO
-class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
+class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UsuarioSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        if is_admin(user):
+            return User.objects.all()
+
+        if is_gerente(user):
+            lojas_do_gerente = Loja.objects.filter(gerente=user)
+            return User.objects.filter(
+                Q(id=user.id) | Q(id__in=lojas_do_gerente.values("responsavel_id"))
+            )
+
+        return User.objects.filter(id=user.id)
 
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
@@ -58,12 +72,17 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
         throttle_classes=[RegistroRateThrottle],
     )
     def registrar(self, request):
-        """POST /api/v1/user/registrar/ — cria gerente. So gerente/admin usa.
+        """POST /api/v1/user/registrar/ — cria gerente. So ADMIN usa.
 
         Nao existe mais cadastro publico. Responsavel nao se cria a mao: cada
         loja ganha o proprio login ao ser cadastrada, a partir do email dela.
         O endpoint segue AllowAny para responder 403 com explicacao em vez do
         401 seco do IsAuthenticated.
+
+        Antes desta mudanca, qualquer gerente tambem podia criar outro
+        gerente (is_gerente_ou_admin). Agora e exclusivo do Admin: gerente
+        deixou de ter privilegio de administracao do sistema, so das
+        proprias lojas.
         """
         data = request.data
         tipo_usuario = data.get('tipo_usuario')
@@ -71,12 +90,12 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
         requester_is_admin = bool(
             request.user
             and request.user.is_authenticated
-            and is_gerente_ou_admin(request.user)
+            and is_admin(request.user)
         )
 
         if not requester_is_admin:
             return Response(
-                {"error": "Apenas um gerente/admin autenticado pode cadastrar usuarios."},
+                {"error": "Apenas um admin autenticado pode cadastrar usuarios."},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -101,6 +120,52 @@ class UsuarioViewSet(UserOuAdminMixin, viewsets.ModelViewSet):
             return Response(corpo, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='estrutura')
+    def estrutura(self, request):
+        """GET /api/v1/user/estrutura/ — arvore Gerente -> Lojas, so Admin.
+
+        Existe para o dashboard nao montar essa arvore com N chamadas
+        soltas (uma por gerente) no front.
+        """
+        if not is_admin(request.user):
+            return Response(
+                {"error": "Apenas admin acessa a estrutura."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        gerentes = (
+            User.objects.filter(groups__name="Gerente")
+            .distinct()
+            .prefetch_related("lojas_gerenciadas__responsavel")
+            .order_by("first_name", "email")
+        )
+
+        data = [
+            {
+                "id": gerente.id,
+                "nome": gerente.first_name or gerente.email or gerente.username,
+                "email": gerente.email,
+                "lojas": [
+                    {
+                        "id": str(loja.public_id),
+                        "nome_loja": loja.nome_loja,
+                        "responsavel": (
+                            {
+                                "id": loja.responsavel_id,
+                                "email": loja.responsavel.email,
+                            }
+                            if loja.responsavel_id
+                            else None
+                        ),
+                    }
+                    for loja in gerente.lojas_gerenciadas.all()
+                ],
+            }
+            for gerente in gerentes
+        ]
+
+        return Response(data)
 
     @action(
         detail=False,

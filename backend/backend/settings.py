@@ -191,8 +191,11 @@ CELERY_TASK_ALWAYS_EAGER = "test" in sys.argv
 CELERY_TASK_EAGER_PROPAGATES = True
 
 # ─── Email ────────────────────────────────────────────────────────────────────
-# Em DEBUG os emails vao para o console; em producao, SMTP via env.
-if DEBUG:
+# Em DEBUG os emails vao para o console; em producao, SMTP via env. EMAIL_BACKEND
+# no .env sobrepoe isso — usado pra testar envio real (Gmail) com DEBUG=True local.
+if os.getenv("EMAIL_BACKEND"):
+    EMAIL_BACKEND = os.getenv("EMAIL_BACKEND")
+elif DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))

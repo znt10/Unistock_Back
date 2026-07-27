@@ -4,6 +4,7 @@ Este pacote substitui o antigo modulo unico serializers.py; todos os
 nomes continuam importaveis de `app.api.v1.serializers`.
 """
 
+from .categorias import CategoriaSerializer
 from .estoque import (
     EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
@@ -27,6 +28,7 @@ from .usuarios import UsuarioSerializer
 from .vendas import VendaCreateSerializer, VendaItemSerializer
 
 __all__ = [
+    "CategoriaSerializer",
     "EstoqueBaixoSerializer",
     "EstoqueCreateSerializer",
     "EstoqueSerializer",

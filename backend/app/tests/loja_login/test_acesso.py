@@ -34,6 +34,7 @@ class CriarLojaCriaAcessoTests(APITestCase):
         acesso = loja.responsavel
         self.assertEqual(acesso.username, 'lapa@unistock.com')
         self.assertEqual(acesso.email, 'lapa@unistock.com')
+        self.assertEqual(acesso.first_name, 'Lapa')
         self.assertFalse(acesso.is_active)
         self.assertFalse(acesso.has_usable_password())
         self.assertTrue(acesso.groups.filter(name='Responsavel').exists())

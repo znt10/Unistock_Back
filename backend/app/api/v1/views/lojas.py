@@ -1,6 +1,8 @@
-from rest_framework import viewsets
+from django.db.models import ProtectedError
+from rest_framework import status, viewsets
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from app.models import Loja
 from app.permissions import (
@@ -59,3 +61,21 @@ class LojaViewSet(viewsets.ModelViewSet):
         if "gerente" in self.request.data and not is_admin(user):
             raise PermissionDenied("Apenas admin pode definir o gerente da loja.")
         serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        # MovimentacaoEstoque protege a loja (on_delete=PROTECT) pra nao perder
+        # o historico auditavel. Sem isso, a exclusao estourava um 500 cru do
+        # banco em vez de dizer o motivo.
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {
+                    "error": (
+                        "Esta loja tem historico de movimentacao de estoque e "
+                        "nao pode ser excluida. Edite a loja e marque-a como "
+                        "inativa em vez de exclui-la."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )

@@ -48,7 +48,7 @@ class Command(BaseCommand):
         if not lojas.exists():
             raise CommandError("Nenhuma loja ativa encontrada.")
 
-        produtos = Produto.objects.all().order_by("categoria", "nome_produto")
+        produtos = Produto.objects.all().order_by("categoria__nome", "nome_produto")
         if not produtos.exists():
             raise CommandError("Nenhum produto encontrado.")
 

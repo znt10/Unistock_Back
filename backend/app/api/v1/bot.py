@@ -20,7 +20,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from app.models import Loja, Pedido, Produto
+from app.models import Categoria, Loja, Pedido, Produto
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 from app.services.pedidos import TransicaoInvalida, mudar_status
 from .serializers import PedidoCreateSerializer
@@ -116,25 +116,30 @@ class BotCatalogoView(BotAPIView):
     """
 
     def get(self, request):
-        produtos = Produto.objects.filter(is_deleted=False).order_by("nome_produto")
+        produtos = (
+            Produto.objects.filter(is_deleted=False)
+            .select_related("categoria")
+            .order_by("nome_produto")
+        )
         por_categoria = {}
         for produto in produtos:
-            por_categoria.setdefault(produto.categoria, []).append({
+            por_categoria.setdefault(produto.categoria_id, []).append({
                 "codigo": produto.id,
                 "nome": produto.nome_produto,
                 "unidade": produto.unidade_medida,
                 "quantidade_por_embalagem": produto.quantidade_por_embalagem,
             })
 
+        categorias_com_produtos = Categoria.objects.filter(id__in=por_categoria.keys())
+
         categorias = [
             {
                 "codigo": indice + 1,
-                "categoria": valor,
-                "nome": rotulo,
-                "produtos": por_categoria[valor],
+                "categoria": str(categoria.public_id),
+                "nome": categoria.nome,
+                "produtos": por_categoria[categoria.id],
             }
-            for indice, (valor, rotulo) in enumerate(Produto.Categoria.choices)
-            if valor in por_categoria
+            for indice, categoria in enumerate(categorias_com_produtos)
         ]
 
         return Response({"categorias": categorias})

@@ -45,6 +45,23 @@ class Loja(BaseModel):
 
 
 
+class Categoria(BaseModel):
+    """Categoria de produto, cadastrada pelo Admin/Gerente (via /admin por enquanto).
+
+    Substitui o antigo enum fixo em Produto.Categoria: para adicionar uma
+    categoria nova basta criar uma linha aqui, sem alterar codigo.
+    """
+
+    nome = models.CharField(max_length=50, unique=True)
+    ordem = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["ordem", "nome"]
+
+    def __str__(self):
+        return self.nome
+
+
 class Produto(BaseModel):
     class UnidadeMedida(models.TextChoices):
         UNIDADE = "UNIDADE", "Unidade"
@@ -52,16 +69,6 @@ class Produto(BaseModel):
         PACOTE = "PACOTE", "Pacote"
         QUILO = "QUILO", "Quilo"
         LITRO = "LITRO", "Litro"
-
-    class Categoria(models.TextChoices):
-        SALGADOS_GDE = "SALGADOS_GDE", "Salgados grande"
-        SALGADOS_MINI = "SALGADOS_MINI", "Salgados mini"
-        ESFIHAS_GDE = "ESFIHAS_GDE", "Esfihas grande"
-        ESFIHAS_MINI = "ESFIHAS_MINI", "Esfihas mini"
-        FOGAZZAS_GDE = "FOGAZZAS_GDE", "Fogazzas grande"
-        FOGAZZAS_MINI = "FOGAZZAS_MINI", "Fogazzas mini"
-        RECHEIOS = "RECHEIOS", "Recheios"
-        MERCADO = "MERCADO", "Mercado"
 
     nome_produto = models.CharField(max_length=100)
     unidade_medida = models.CharField(
@@ -71,10 +78,10 @@ class Produto(BaseModel):
     )
     quantidade_por_embalagem = models.PositiveIntegerField(null=True, blank=True)
     estoque_minimo_sugerido = models.PositiveIntegerField(default=1)
-    categoria = models.CharField(
-        max_length=30,
-        choices=Categoria.choices,
-        default=Categoria.MERCADO,
+    categoria = models.ForeignKey(
+        Categoria,
+        on_delete=models.PROTECT,
+        related_name="produtos",
     )
 
     def __str__(self):

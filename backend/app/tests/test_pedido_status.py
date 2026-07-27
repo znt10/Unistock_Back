@@ -13,7 +13,7 @@ from django.contrib.auth.models import Group, User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, ItemPedido, Loja, Pedido, Produto
+from app.models import Categoria, Estoque, ItemPedido, Loja, Pedido, Produto
 
 TOKEN_BOT = "token-de-teste"
 CABECALHO_BOT = {"HTTP_X_BOT_TOKEN": TOKEN_BOT}
@@ -42,10 +42,11 @@ class TransicaoDeStatusTests(APITestCase):
             gerente=self.gerente,
             telefone_whatsapp=TELEFONE_LOJA,
         )
+        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
         self.produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
-            categoria=Produto.Categoria.SALGADOS_GDE,
+            categoria=categoria,
         )
 
     def criar_pedido(self, status=Pedido.Status.PENDENTE, quantidade=3):

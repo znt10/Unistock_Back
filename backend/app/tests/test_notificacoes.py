@@ -3,7 +3,7 @@ from django.core import mail
 from django.test import TestCase
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, Loja, Notificacao, Produto
+from app.models import Categoria, Estoque, Loja, Notificacao, Produto
 from app.notifications import notificar_estoque_baixo
 
 
@@ -35,9 +35,10 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             endereco='Rua 2',
             responsavel=responsavel_loja_2,
         )
+        categoria = Categoria.objects.get_or_create(nome='Salgados grande')[0]
         produto = Produto.objects.create(
             nome_produto='Coxinha',
-            categoria='SALGADOS_GDE',
+            categoria=categoria,
             estoque_minimo_sugerido=5,
         )
         estoque = Estoque.objects.create(
@@ -79,7 +80,8 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             nome_loja='Loja do Resp', cidade='Patos', endereco='Rua 9',
             responsavel=responsavel,
         )
-        produto = Produto.objects.create(nome_produto='Guarana', categoria='MERCADO')
+        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
+        produto = Produto.objects.create(nome_produto='Guarana', categoria=categoria)
         estoque = Estoque.objects.create(
             loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=3,
         )
@@ -107,7 +109,8 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             nome_loja='Loja Muda', cidade='Patos', endereco='Rua 3',
             responsavel=usuario,
         )
-        produto = Produto.objects.create(nome_produto='Coxinho', categoria='MERCADO')
+        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
+        produto = Produto.objects.create(nome_produto='Coxinho', categoria=categoria)
         estoque = Estoque.objects.create(
             loja=loja, produto=produto, quantidade_atual=1, quantidade_minima=3,
         )
@@ -137,9 +140,10 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             endereco='Rua',
             responsavel=usuario,
         )
+        categoria = Categoria.objects.get_or_create(nome='Esfihas grande')[0]
         produto = Produto.objects.create(
             nome_produto='Esfiha',
-            categoria='ESFIHAS_GDE',
+            categoria=categoria,
         )
         estoque = Estoque.objects.create(
             loja=loja,
@@ -198,7 +202,8 @@ class NotificacaoAssincronaTests(APITestCase):
             nome_loja='Loja Email', cidade='Patos', endereco='Rua 1',
             responsavel=responsavel,
         )
-        produto = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
+        produto = Produto.objects.create(nome_produto='Coca', categoria=categoria)
         estoque = Estoque.objects.create(
             loja=loja, produto=produto,
             quantidade_atual=1, quantidade_minima=5,

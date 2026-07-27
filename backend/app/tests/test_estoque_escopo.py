@@ -2,7 +2,7 @@ from django.contrib.auth.models import Group, User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from app.models import Estoque, Loja, Produto
+from app.models import Categoria, Estoque, Loja, Produto
 
 
 class EstoqueEscopoGerenteTests(TestCase):
@@ -21,10 +21,11 @@ class EstoqueEscopoGerenteTests(TestCase):
         self.loja_alheia = Loja.objects.create(
             nome_loja="Loja B", cidade="Patos", endereco="Rua 2", gerente=self.outro_gerente,
         )
+        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
         produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
-            categoria=Produto.Categoria.SALGADOS_GDE,
+            categoria=categoria,
         )
         self.estoque_dele = Estoque.objects.create(
             loja=self.loja_dele, produto=produto, quantidade_atual=5, quantidade_minima=2,

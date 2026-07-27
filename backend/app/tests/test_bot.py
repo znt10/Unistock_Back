@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, Loja, Pedido, Produto
+from app.models import Categoria, Estoque, Loja, Pedido, Produto
 
 try:
     import weasyprint  # noqa: F401
@@ -34,16 +34,18 @@ class BotApiTests(APITestCase):
             responsavel=self.responsavel,
             telefone_whatsapp=TELEFONE_LOJA,
         )
+        self.cat_salgados = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        self.cat_mercado = Categoria.objects.get_or_create(nome="Mercado")[0]
         self.coxinha = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             quantidade_por_embalagem=30,
-            categoria=Produto.Categoria.SALGADOS_GDE,
+            categoria=self.cat_salgados,
         )
         self.coca = Produto.objects.create(
             nome_produto="Coca 2L",
             unidade_medida=Produto.UnidadeMedida.UNIDADE,
-            categoria=Produto.Categoria.MERCADO,
+            categoria=self.cat_mercado,
         )
 
     # --- autenticacao de servico ---
@@ -95,9 +97,9 @@ class BotApiTests(APITestCase):
         response = self.client.get("/api/v1/bot/catalogo/", **HEADERS)
         self.assertEqual(response.status_code, 200)
 
-        categorias = {c["categoria"]: c for c in response.data["categorias"]}
-        self.assertIn("SALGADOS_GDE", categorias)
-        produto = categorias["SALGADOS_GDE"]["produtos"][0]
+        categorias = {c["nome"]: c for c in response.data["categorias"]}
+        self.assertIn("Salgados grande", categorias)
+        produto = categorias["Salgados grande"]["produtos"][0]
         self.assertEqual(produto["codigo"], self.coxinha.id)
         self.assertEqual(produto["unidade"], "CAIXA")
 

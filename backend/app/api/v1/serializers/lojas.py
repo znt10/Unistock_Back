@@ -21,7 +21,9 @@ def criar_acesso_da_loja(loja):
         return None
 
     with transaction.atomic():
-        acesso = User.objects.create(username=loja.email, email=loja.email)
+        acesso = User.objects.create(
+            username=loja.email, email=loja.email, first_name=loja.nome_loja,
+        )
         acesso.set_unusable_password()
         acesso.is_active = False
         acesso.save()
@@ -67,8 +69,9 @@ class LojaSerializer(serializers.ModelSerializer):
         ]
 
     def get_responsavel_nome(self, loja):
-        """Nome de exibicao do acesso. A conta da loja nao tem first_name, entao
-        cai pro email — melhor que uma coluna em branco na tela."""
+        """Nome de exibicao do acesso: o first_name e o nome da loja (setado na
+        criacao do acesso). Cai pro email/username pra contas criadas antes
+        disso, que nasceram sem first_name."""
         acesso = loja.responsavel
         if not acesso:
             return None

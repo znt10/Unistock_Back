@@ -64,6 +64,24 @@ class LojaQuerysetEscopoTests(TestCase):
         self.loja_dele.refresh_from_db()
         self.assertEqual(self.loja_dele.gerente_id, self.outro_gerente.id)
 
+    def test_admin_nao_pode_salvar_gerente_com_usuario_que_nao_e_gerente(self):
+        """gerente aceita qualquer User na FK — quem restringe e validate_gerente."""
+        responsavel = User.objects.create_user(username="resp@x.com", password="123456")
+        responsavel.groups.add(Group.objects.get(name="Responsavel"))
+
+        client = APIClient()
+        client.force_authenticate(self.admin)
+        resp = client.patch(
+            f"/api/v1/lojas/{self.loja_dele.public_id}/",
+            {"gerente": responsavel.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.data)
+        self.assertIn("gerente", resp.data)
+        self.loja_dele.refresh_from_db()
+        self.assertEqual(self.loja_dele.gerente_id, self.gerente.id)
+
 
 class LojaDeleteTests(APITestCase):
     """DELETE /api/v1/lojas/<id>/ nao pode estourar 500 quando ha historico."""

@@ -1,8 +1,10 @@
 from django.contrib import admin
 
-from .models import  Loja, Produto, Pedido, ItemPedido, Estoque, Notificacao
+from .models import  Categoria, Loja, Produto, Pedido, ItemPedido, Estoque, Notificacao
 
 admin.site.register(Loja)
+
+admin.site.register(Categoria)
 
 admin.site.register(Produto)
 

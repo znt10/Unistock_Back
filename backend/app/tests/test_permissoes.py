@@ -20,7 +20,7 @@ from django.test import RequestFactory, TestCase
 from app import notifications
 from app.api.v1.views import get_user_group_name as papel_do_viewsets
 from app.api.v1.views import is_gerente_ou_admin as regra_do_viewsets
-from app.models import Estoque, Loja, Produto
+from app.models import Categoria, Estoque, Loja, Produto
 from app.permissions import (
     IsGerenteOrAdministrador,
     IsGerenteOrAdministradorOrResponsavel,
@@ -177,10 +177,11 @@ class PermissaoResponsavelTests(TestCase):
             gerente=self.outro_gerente,
         )
 
+        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
         produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
-            categoria=Produto.Categoria.SALGADOS_GDE,
+            categoria=categoria,
         )
         self.estoque_dele = Estoque.objects.create(
             loja=self.loja_dele, produto=produto,

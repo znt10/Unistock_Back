@@ -4,16 +4,18 @@ from django.contrib.auth.models import Group, User
 from django.core import mail
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, Loja, Produto
+from app.models import Categoria, Estoque, Loja, Produto
 from app.notifications.tasks import enviar_digest_lojas
 
 
 class DigestPorLojaTests(APITestCase):
     def setUp(self):
+        cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
+        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
         self.coxinha = Produto.objects.create(
-            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+            nome_produto='Coxinha', categoria=cat_salgados,
         )
-        self.coca = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        self.coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
 
     def _loja(self, nome, email=None):
         return Loja.objects.create(

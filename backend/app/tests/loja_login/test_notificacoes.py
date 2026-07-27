@@ -16,14 +16,15 @@ class NotificacaoObsoletaTests(TestCase):
     """
 
     def setUp(self):
-        from app.models import Produto
+        from app.models import Categoria, Produto
 
         self.dono = User.objects.create_user(username='dono@unistock.com', password='123')
         self.loja = Loja.objects.create(
             nome_loja='Lapa', cidade='Patos', endereco='Rua 1', responsavel=self.dono,
         )
+        categoria = Categoria.objects.get_or_create(nome='Salgados grande')[0]
         self.produto = Produto.objects.create(
-            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+            nome_produto='Coxinha', categoria=categoria,
         )
 
     def test_alerta_some_quando_o_estoque_se_recupera(self):

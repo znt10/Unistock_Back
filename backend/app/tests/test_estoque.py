@@ -3,7 +3,7 @@ from django.db import IntegrityError, transaction
 from rest_framework.test import APITestCase
 
 from app.models import (
-    Estoque, ItemPedido, Loja, MovimentacaoEstoque, Pedido, Produto,
+    Categoria, Estoque, ItemPedido, Loja, MovimentacaoEstoque, Pedido, Produto,
 )
 
 
@@ -24,10 +24,12 @@ class EstoqueBaixosTests(APITestCase):
             nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
             gerente=self.gerente,
         )
+        cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
+        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
         coxinha = Produto.objects.create(
-            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+            nome_produto='Coxinha', categoria=cat_salgados,
         )
-        coca = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
 
         # Baixo na loja A, baixo na loja B, e um em dia na loja A.
         Estoque.objects.create(
@@ -85,8 +87,9 @@ class EstoqueIntegridadeTests(APITestCase):
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
             responsavel=self.user, gerente=self.gerente,
         )
+        self.cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
         self.produto = Produto.objects.create(
-            nome_produto='Coxinha', categoria='SALGADOS_GDE',
+            nome_produto='Coxinha', categoria=self.cat_salgados,
         )
         self.estoque = Estoque.objects.create(
             loja=self.loja, produto=self.produto,
@@ -101,7 +104,8 @@ class EstoqueIntegridadeTests(APITestCase):
             )
 
     def test_nao_permite_estoque_negativo(self):
-        outro = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
+        outro = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
         with self.assertRaises(IntegrityError), transaction.atomic():
             Estoque.objects.create(
                 loja=self.loja, produto=outro,

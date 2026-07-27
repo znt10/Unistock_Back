@@ -2,7 +2,7 @@ from django.contrib.auth.models import Group, User
 from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
 
-from app.models import Loja, Produto
+from app.models import Categoria, Loja, Produto
 
 
 class PedidoAPITestCase(APITestCase):
@@ -37,10 +37,11 @@ class PedidoAPITestCase(APITestCase):
         self.admin.groups.add(self.grupo_admin)
 
 
+        self.categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
         self.produto = Produto.objects.create(
             nome_produto="coxinha",
             unidade_medida="QUILO",
-            categoria="SALGADOS_GDE",
+            categoria=self.categoria,
         )
         # Loja
         self.loja = Loja.objects.create(
@@ -108,7 +109,7 @@ class PedidoAPITestCase(APITestCase):
         produto_data = {
             "nome_produto": "Produto X",
             "unidade_medida": "UNIDADE",
-            "categoria": "MERCADO",
+            "categoria": str(self.categoria.public_id),
         }
 
         response = self.client.post(url_produto, produto_data)
@@ -156,7 +157,7 @@ class PedidoAPITestCase(APITestCase):
         data = {
             "nome_produto": "Produto Teste",
             "unidade_medida": "UNIDADE",
-            "categoria": "MERCADO",
+            "categoria": str(self.categoria.public_id),
         }
 
         response = self.client.post(url, data)

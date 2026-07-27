@@ -3,7 +3,7 @@
 from django.contrib.auth.models import Group, User
 from rest_framework.test import APITestCase
 
-from app.models import Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
+from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
 from app.notifications import notificar_estoque_baixo
 
 try:
@@ -70,7 +70,8 @@ class NotificacaoPorFkTests(APITestCase):
             nome_loja='Loja FK', cidade='Patos', endereco='Rua 1',
             responsavel=self.user,
         )
-        self.produto = Produto.objects.create(nome_produto='Coca', categoria='MERCADO')
+        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
+        self.produto = Produto.objects.create(nome_produto='Coca', categoria=categoria)
         self.estoque = Estoque.objects.create(
             loja=self.loja, produto=self.produto,
             quantidade_atual=1, quantidade_minima=5,

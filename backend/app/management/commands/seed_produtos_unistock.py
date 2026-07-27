@@ -1,11 +1,11 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from app.models import Produto
+from app.models import Categoria, Produto
 
 
 PRODUTOS = {
-    Produto.Categoria.SALGADOS_GDE: [
+    "Salgados grande": [
         "Coxinha",
         "Risoles de queijo",
         "Risole presunto e queijo",
@@ -15,7 +15,7 @@ PRODUTOS = {
         "Salsicha",
         "Bolinho ovo",
     ],
-    Produto.Categoria.SALGADOS_MINI: [
+    "Salgados mini": [
         "Coxinha",
         "Risoles de queijo",
         "Risole presunto e queijo",
@@ -23,7 +23,7 @@ PRODUTOS = {
         "Kibe",
         "Kibe Queijo",
     ],
-    Produto.Categoria.ESFIHAS_GDE: [
+    "Esfihas grande": [
         "Carne",
         "Frango",
         "Bauru",
@@ -32,7 +32,7 @@ PRODUTOS = {
         "Salsicha com cheddar",
         "Torta de banana",
     ],
-    Produto.Categoria.ESFIHAS_MINI: [
+    "Esfihas mini": [
         "Carne",
         "Frango",
         "Bauru",
@@ -41,7 +41,7 @@ PRODUTOS = {
         "Salsicha com cheddar",
         "Torta de banana",
     ],
-    Produto.Categoria.FOGAZZAS_GDE: [
+    "Fogazzas grande": [
         "Presunto e Queijo",
         "2 Queijos",
         "Calabresa",
@@ -50,7 +50,7 @@ PRODUTOS = {
         "Chocolate",
         "Doce de leite",
     ],
-    Produto.Categoria.FOGAZZAS_MINI: [
+    "Fogazzas mini": [
         "Presunto e Queijo",
         "2 Queijos",
         "Calabresa",
@@ -59,7 +59,7 @@ PRODUTOS = {
         "Chocolate",
         "Doce de leite",
     ],
-    Produto.Categoria.RECHEIOS: [
+    "Recheios": [
         "Açúcar+canela",
         "Bisnaga de chocolate",
         "Bisnaga doce de leite",
@@ -81,7 +81,7 @@ PRODUTOS = {
         "Presunto",
         "Tomate",
     ],
-    Produto.Categoria.MERCADO: [
+    "Mercado": [
         "Açúcar",
         "Café",
         "Detergente",
@@ -112,7 +112,10 @@ class Command(BaseCommand):
         criados = 0
         atualizados = 0
 
-        for categoria, nomes in PRODUTOS.items():
+        for indice, (nome_categoria, nomes) in enumerate(PRODUTOS.items()):
+            categoria, _ = Categoria.objects.get_or_create(
+                nome=nome_categoria, defaults={"ordem": indice}
+            )
             for nome in nomes:
                 _, created = Produto.objects.update_or_create(
                     nome_produto=nome.strip(),

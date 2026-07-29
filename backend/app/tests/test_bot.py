@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from app.models import Categoria, Estoque, Loja, Pedido, Produto
+from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Pedido, Produto
 
 try:
     import weasyprint  # noqa: F401
@@ -241,6 +241,158 @@ class BotApiTests(APITestCase):
             **HEADERS,
         )
         self.assertEqual(response.status_code, 404)
+
+    # --- remocao manual de estoque ---
+
+    def test_remove_estoque_da_baixa_e_registra_movimentacao(self):
+        estoque = Estoque.objects.create(
+            produto=self.coxinha, loja=self.loja,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 3}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["itens"][0]["quantidade_atual"], 7)
+
+        estoque.refresh_from_db()
+        self.assertEqual(estoque.quantidade_atual, 7)
+
+        mov = MovimentacaoEstoque.objects.get(tipo=MovimentacaoEstoque.Tipo.SAIDA)
+        self.assertEqual(mov.produto, self.coxinha)
+        self.assertEqual(mov.loja_origem, self.loja)
+        self.assertEqual(mov.quantidade, 3)
+
+    def test_remove_estoque_agrega_itens_com_mesmo_codigo(self):
+        Estoque.objects.create(
+            produto=self.coxinha, loja=self.loja,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {
+                "telefone": TELEFONE_LOJA,
+                "itens": [
+                    {"codigo": self.coxinha.id, "quantidade": 3},
+                    {"codigo": self.coxinha.id, "quantidade": 2},
+                ],
+            },
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(len(response.data["itens"]), 1)
+        self.assertEqual(response.data["itens"][0]["quantidade_removida"], 5)
+
+    def test_remove_estoque_insuficiente_409(self):
+        Estoque.objects.create(
+            produto=self.coxinha, loja=self.loja,
+            quantidade_atual=2, quantidade_minima=2,
+        )
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 5}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 409, response.data)
+
+        estoque = Estoque.objects.get(produto=self.coxinha, loja=self.loja)
+        self.assertEqual(estoque.quantidade_atual, 2)
+
+    def test_remove_estoque_produto_sem_estoque_cadastrado_409(self):
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 1}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 409, response.data)
+
+    def test_remove_estoque_produto_nao_encontrado_400(self):
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": 99999, "quantidade": 1}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_remove_estoque_item_malformado_da_400_e_nao_500(self):
+        for itens in ([["nao sou objeto"]], [[{"codigo": "abc", "quantidade": 1}]]):
+            with self.subTest(itens=itens):
+                response = self.client.post(
+                    "/api/v1/bot/estoque/remover/",
+                    {"telefone": TELEFONE_LOJA, "itens": itens[0]},
+                    format="json",
+                    **HEADERS,
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+
+    def test_remove_estoque_quantidade_invalida_400(self):
+        Estoque.objects.create(
+            produto=self.coxinha, loja=self.loja,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+        for quantidade in (0, -1, "abc"):
+            with self.subTest(quantidade=quantidade):
+                response = self.client.post(
+                    "/api/v1/bot/estoque/remover/",
+                    {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": quantidade}]},
+                    format="json",
+                    **HEADERS,
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+
+    def test_remove_estoque_so_afeta_a_loja_do_telefone(self):
+        """So o numero de WhatsApp DA LOJA pode dar baixa no estoque dela —
+        nao ha campo de loja no corpo, so o telefone resolve quem esta mexendo."""
+        outro_user = User.objects.create_user(username="maria@email.com", password="123456")
+        outra_loja = Loja.objects.create(
+            nome_loja="Loja Sul", cidade="Patos", endereco="Rua B, 2",
+            responsavel=outro_user,
+            telefone_whatsapp="5583988887777",
+        )
+        Estoque.objects.create(
+            produto=self.coxinha, loja=self.loja,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+        estoque_outra_loja = Estoque.objects.create(
+            produto=self.coxinha, loja=outra_loja,
+            quantidade_atual=10, quantidade_minima=2,
+        )
+
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 3}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        estoque_outra_loja.refresh_from_db()
+        self.assertEqual(estoque_outra_loja.quantidade_atual, 10)
+
+    def test_remove_estoque_telefone_desconhecido_404(self):
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": "550000000000", "itens": [{"codigo": self.coxinha.id, "quantidade": 1}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_remove_estoque_sem_itens_400(self):
+        response = self.client.post(
+            "/api/v1/bot/estoque/remover/",
+            {"telefone": TELEFONE_LOJA, "itens": []},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 400)
 
     # --- relatorio PDF: exclusivo do gerente ---
 

@@ -4,10 +4,10 @@ services:
     container_name: unistock_db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "12345"
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?defina MYSQL_ROOT_PASSWORD no .env}
       MYSQL_DATABASE: p5
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

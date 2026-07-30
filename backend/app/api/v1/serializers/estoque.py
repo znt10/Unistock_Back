@@ -25,6 +25,30 @@ class EstoqueSerializer(serializers.ModelSerializer):
         ]
 
 
+class EstoqueBaixoSerializer(serializers.ModelSerializer):
+    """Leitura enxuta para o painel de estoque baixo (nomes ja resolvidos)."""
+
+    id = serializers.UUIDField(source="public_id", read_only=True)
+    loja_id = serializers.UUIDField(source="loja.public_id", read_only=True)
+    loja_nome = serializers.CharField(source="loja.nome_loja", read_only=True)
+    produto_nome = serializers.CharField(source="produto.nome_produto", read_only=True)
+    unidade_medida = serializers.CharField(
+        source="produto.unidade_medida", read_only=True
+    )
+
+    class Meta:
+        model = Estoque
+        fields = [
+            "id",
+            "loja_id",
+            "loja_nome",
+            "produto_nome",
+            "unidade_medida",
+            "quantidade_atual",
+            "quantidade_minima",
+        ]
+
+
 class EstoqueWriteSerializer(EstoqueSerializer):
     """Base para criacao/atualizacao de estoque."""
 

@@ -1,10 +1,15 @@
 from rest_framework import serializers
 
-from app.models import Produto
+from app.models import Categoria, Produto
 
 
 class ProdutoSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source="public_id", read_only=True)
+    categoria = serializers.SlugRelatedField(
+        slug_field="public_id",
+        queryset=Categoria.objects.all(),
+    )
+    categoria_nome = serializers.ReadOnlyField(source="categoria.nome")
 
     class Meta:
         model = Produto
@@ -15,6 +20,7 @@ class ProdutoSerializer(serializers.ModelSerializer):
             "quantidade_por_embalagem",
             "estoque_minimo_sugerido",
             "categoria",
+            "categoria_nome",
         ]
 
     def validate(self, data):

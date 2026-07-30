@@ -20,14 +20,23 @@ if not SECRET_KEY:
 
 DEBUG = os.getenv("DEBUG", "False").lower() in ("1", "true", "yes", "on")
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv(
-        "ALLOWED_HOSTS",
-        "localhost,127.0.0.1,0.0.0.0,5periodoback-production.up.railway.app",
-    ).split(",")
-    if host.strip()
-]
+
+def lista_do_ambiente(nome):
+    """Lista separada por virgula vinda do .env.
+
+    Sem valor padrao de proposito: host e URL de producao nao ficam no codigo
+    versionado. Falta a variavel? Erro explicito, e nao um AttributeError de
+    NoneType.split() que nao diz o que fazer.
+    """
+    valor = os.getenv(nome)
+    if not valor:
+        raise ImproperlyConfigured(
+            f"{nome} precisa estar definida no ambiente (veja .env.example)."
+        )
+    return [item.strip() for item in valor.split(",") if item.strip()]
+
+
+ALLOWED_HOSTS = lista_do_ambiente("ALLOWED_HOSTS")
 
 
 INSTALLED_APPS = [
@@ -79,12 +88,12 @@ ASGI_APPLICATION = "backend.asgi.application"
 if os.getenv("DB_ENGINE"):
     DATABASES = {
         "default": {
-            "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.mysql"),
-            "NAME": os.getenv("DB_NAME", "p5"),
-            "USER": os.getenv("DB_USER", "root"),
-            "PASSWORD": os.getenv("DB_PASSWORD", ""),
-            "HOST": os.getenv("DB_HOST", "localhost"),
-            "PORT": os.getenv("DB_PORT", "3306"),
+            "ENGINE": os.getenv("DB_ENGINE"),
+            "NAME": os.getenv("DB_NAME"),
+            "USER": os.getenv("DB_USER"),
+            "PASSWORD": os.getenv("DB_PASSWORD"),
+            "HOST": os.getenv("DB_HOST"),
+            "PORT": os.getenv("DB_PORT"),
         }
     }
 else:
@@ -124,23 +133,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # CORS / CSRF
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,https://unistockteste.vercel.app",
-    ).split(",")
-    if origin.strip()
-]
+CORS_ALLOWED_ORIGINS = lista_do_ambiente("CORS_ALLOWED_ORIGINS")
 
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "CSRF_TRUSTED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,https://unistockteste.vercel.app",
-    ).split(",")
-    if origin.strip()
-]
+CSRF_TRUSTED_ORIGINS = lista_do_ambiente("CSRF_TRUSTED_ORIGINS")
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
@@ -163,6 +158,7 @@ REST_FRAMEWORK = {
         "user": "300/min",
         "login": "10/min",
         "registro": "20/hour",
+        "senha": "10/hour",
     },
 }
 
@@ -195,8 +191,11 @@ CELERY_TASK_ALWAYS_EAGER = "test" in sys.argv
 CELERY_TASK_EAGER_PROPAGATES = True
 
 # ─── Email ────────────────────────────────────────────────────────────────────
-# Em DEBUG os emails vao para o console; em producao, SMTP via env.
-if DEBUG:
+# Em DEBUG os emails vao para o console; em producao, SMTP via env. EMAIL_BACKEND
+# no .env sobrepoe isso — usado pra testar envio real (Gmail) com DEBUG=True local.
+if os.getenv("EMAIL_BACKEND"):
+    EMAIL_BACKEND = os.getenv("EMAIL_BACKEND")
+elif DEBUG:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
@@ -208,6 +207,5 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Unistock <no-reply@unistoc
 # cai num buraco negro e so estoura no timeout padrao do TCP (~134s) antes de
 # cair pro IPv4. Com 10s a tentativa IPv6 desiste rapido e o fallback IPv4 envia.
 EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
-
 # URL do front, usada para montar links em emails (confirmacao de conta).
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")

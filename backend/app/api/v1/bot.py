@@ -14,17 +14,18 @@ from datetime import date
 from types import SimpleNamespace
 
 from django.conf import settings
+from django.db import transaction
 from django.utils.crypto import constant_time_compare
 from rest_framework import status
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from app.models import Loja, Pedido, Produto
-from app.notifications import notificar_estoques_baixos_do_pedido
+from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Pedido, Produto
+from app.notifications import notificar_estoque_baixo
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
+from app.services.pedidos import TransicaoInvalida, mudar_status
 from .serializers import PedidoCreateSerializer
-from .viewsets import somar_itens_no_estoque
 
 
 def normalizar_telefone(valor):
@@ -117,25 +118,30 @@ class BotCatalogoView(BotAPIView):
     """
 
     def get(self, request):
-        produtos = Produto.objects.filter(is_deleted=False).order_by("nome_produto")
+        produtos = (
+            Produto.objects.filter(is_deleted=False)
+            .select_related("categoria")
+            .order_by("nome_produto")
+        )
         por_categoria = {}
         for produto in produtos:
-            por_categoria.setdefault(produto.categoria, []).append({
+            por_categoria.setdefault(produto.categoria_id, []).append({
                 "codigo": produto.id,
                 "nome": produto.nome_produto,
                 "unidade": produto.unidade_medida,
                 "quantidade_por_embalagem": produto.quantidade_por_embalagem,
             })
 
+        categorias_com_produtos = Categoria.objects.filter(id__in=por_categoria.keys())
+
         categorias = [
             {
                 "codigo": indice + 1,
-                "categoria": valor,
-                "nome": rotulo,
-                "produtos": por_categoria[valor],
+                "categoria": str(categoria.public_id),
+                "nome": categoria.nome,
+                "produtos": por_categoria[categoria.id],
             }
-            for indice, (valor, rotulo) in enumerate(Produto.Categoria.choices)
-            if valor in por_categoria
+            for indice, categoria in enumerate(categorias_com_produtos)
         ]
 
         return Response({"categorias": categorias})
@@ -165,8 +171,25 @@ class BotPedidoView(BotAPIView):
 
         itens = []
         for item in itens_brutos:
+            # O corpo vem do bot, que repassa o que a loja digitou no WhatsApp:
+            # item pode nao ser objeto, e codigo pode nao ser numero. Sem esta
+            # guarda dava AttributeError/ValueError e virava 500.
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": "Cada item precisa ter codigo e quantidade."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             codigo = item.get("codigo")
             quantidade = item.get("quantidade")
+
+            try:
+                codigo = int(codigo)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": f"Codigo de produto invalido: {codigo!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
             if not produto:
@@ -213,24 +236,139 @@ class BotPedidoConfirmarView(BotAPIView):
         if not loja:
             return self.erro_loja()
 
-        pedido = Pedido.objects.filter(id=numero, loja=loja).first()
-        if not pedido:
+        # Leitura so para distinguir 404 de 409; o trabalho de verdade e feito
+        # em mudar_status, que re-busca o pedido ja com o lock.
+        if not Pedido.objects.filter(id=numero, loja=loja).exists():
             return Response(
                 {"error": f"Pedido {numero} nao encontrado para a sua loja."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if pedido.status == Pedido.Status.ENTREGUE:
-            return Response({"numero": pedido.id, "status": pedido.status})
-
-        pedido.status = Pedido.Status.ENTREGUE
-        pedido.save(update_fields=["status", "updated_at"])
-        somar_itens_no_estoque(pedido)
-        notificar_estoques_baixos_do_pedido(
-            pedido, usuario_editor=loja.responsavel
-        )
+        try:
+            pedido = mudar_status(
+                numero,
+                Pedido.Status.ENTREGUE,
+                usuario_editor=loja.responsavel,
+            )
+        except TransicaoInvalida as erro:
+            return Response(
+                {"error": str(erro)}, status=status.HTTP_409_CONFLICT
+            )
 
         return Response({"numero": pedido.id, "status": pedido.status})
+
+
+class BotEstoqueRemoverView(BotAPIView):
+    """POST /api/v1/bot/estoque/remover/ — da baixa manual no estoque da loja.
+
+    Body: {"telefone": "...", "itens": [{"codigo": <id produto>, "quantidade": n}]}
+
+    Para perda, quebra ou consumo interno reportado pelo WhatsApp — nao passa
+    por pedido nem pelo PDV. Registra MovimentacaoEstoque tipo SAIDA.
+    """
+
+    @transaction.atomic
+    def post(self, request):
+        loja = self.resolver_loja(request.data.get("telefone"))
+
+        if not loja:
+            return self.erro_loja()
+
+        itens_brutos = request.data.get("itens") or []
+        if not isinstance(itens_brutos, list) or not itens_brutos:
+            return Response(
+                {"error": "Informe ao menos um item."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Mesma guarda robusta do BotPedidoView: o corpo vem do que a loja
+        # digitou no WhatsApp, entao codigo/quantidade podem vir em qualquer
+        # formato. Agrega por produto para nao dar baixa duas vezes se o
+        # mesmo codigo aparecer repetido no pedido.
+        produtos_por_id = {}
+        quantidades_por_produto = {}
+        for item in itens_brutos:
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": "Cada item precisa ter codigo e quantidade."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            codigo = item.get("codigo")
+            try:
+                codigo = int(codigo)
+            except (TypeError, ValueError):
+                return Response(
+                    {"error": f"Codigo de produto invalido: {codigo!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                quantidade = int(item.get("quantidade"))
+            except (TypeError, ValueError):
+                quantidade = None
+            if not quantidade or quantidade <= 0:
+                return Response(
+                    {"error": f"Quantidade invalida para o codigo {codigo}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
+            if not produto:
+                return Response(
+                    {"error": f"Produto de codigo {codigo} nao encontrado."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            produtos_por_id[produto.id] = produto
+            quantidades_por_produto[produto.id] = (
+                quantidades_por_produto.get(produto.id, 0) + quantidade
+            )
+
+        # Lock nas linhas de estoque envolvidas antes de validar disponibilidade:
+        # sem isso, duas remocoes concorrentes (ex.: bot repetindo apos falha de
+        # rede) poderiam passar as duas pela checagem e deixar o saldo negativo.
+        estoques = {
+            estoque.produto_id: estoque
+            for estoque in Estoque.objects.select_for_update()
+            .filter(loja=loja, produto_id__in=produtos_por_id, is_deleted=False)
+        }
+
+        for produto_id, quantidade in quantidades_por_produto.items():
+            estoque = estoques.get(produto_id)
+            disponivel = estoque.quantidade_atual if estoque else 0
+            if disponivel < quantidade:
+                return Response(
+                    {
+                        "error": (
+                            f"Estoque insuficiente de "
+                            f"{produtos_por_id[produto_id].nome_produto}: "
+                            f"disponivel {disponivel}, solicitado {quantidade}."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        itens_removidos = []
+        for produto_id, quantidade in quantidades_por_produto.items():
+            estoque = estoques[produto_id]
+            estoque.quantidade_atual -= quantidade
+            estoque.save(update_fields=["quantidade_atual", "updated_at"])
+            MovimentacaoEstoque.objects.create(
+                tipo=MovimentacaoEstoque.Tipo.SAIDA,
+                produto=produtos_por_id[produto_id],
+                loja_origem=loja,
+                quantidade=quantidade,
+                usuario=loja.responsavel,
+            )
+            notificar_estoque_baixo(estoque, usuario_editor=loja.responsavel)
+            itens_removidos.append({
+                "produto": produtos_por_id[produto_id].nome_produto,
+                "quantidade_removida": quantidade,
+                "quantidade_atual": estoque.quantidade_atual,
+            })
+
+        return Response({"itens": itens_removidos}, status=status.HTTP_200_OK)
 
 
 class BotRelatorioView(BotAPIView):

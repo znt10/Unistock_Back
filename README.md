@@ -28,6 +28,7 @@ corpo da resposta, para nao ficar acessivel ao JavaScript.
 | MySQL 8 | banco |
 | Celery + Redis | email assincrono e tarefas agendadas |
 | drf-spectacular | schema OpenAPI e Swagger |
+| Evolution API (self-hosted) | bot de WhatsApp — nao usa a API oficial da Meta |
 | Docker Compose | sobe tudo junto |
 
 ## Como rodar
@@ -46,8 +47,10 @@ docker compose up -d --build     # em segundo plano
 docker compose down              # parar
 ```
 
-O compose sobe cinco servicos: `db` (MySQL), `redis`, `api`, `worker` (Celery)
-e `beat` (agendador).
+O compose sobe oito servicos: `db` (MySQL), `redis`, `api`, `worker` (Celery),
+`beat` (agendador) e o trio do bot de WhatsApp — `evolution-db` (Postgres),
+`evolution-api` e `evolution-manager` (Evolution API, nao-oficial, baseada em
+Baileys).
 
 Ao subir, o `entrypoint` aplica as migrations, carrega os grupos e cria ou
 atualiza o usuario admin a partir do `.env`.
@@ -59,6 +62,8 @@ atualiza o usuario admin a partir do `.env`.
 | Swagger | http://localhost:8000/api/schema/swagger/ |
 | Redoc | http://localhost:8000/api/schema/redoc/ |
 | Schema OpenAPI | http://localhost:8000/api/schema/ |
+| Evolution Manager (UI, conectar o zap) | http://localhost:3001 |
+| Evolution API | http://localhost:8080 |
 
 ## Configuracao (.env)
 
@@ -77,6 +82,9 @@ Pontos que costumam pegar:
 - **`DB_HOST`** — dentro do Docker o compose sobrescreve para `db`. O valor do
   `.env` so vale se voce rodar o Django fora do container.
 - **`BOT_SERVICE_TOKEN`** — vazio desativa as rotas do bot de WhatsApp.
+- **`EVOLUTION_API_KEY` / `EVOLUTION_POSTGRES_PASSWORD`** — obrigatorias para
+  os servicos `evolution-*` subirem. Sem elas o `docker compose up` falha ao
+  criar esses containers.
 - **Email** — com `DEBUG=True` os emails saem no console do worker. Nao precisa
   de SMTP para desenvolver.
 

@@ -5,15 +5,19 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from django.http import HttpRequest, HttpResponse
+from datetime import date
+
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest
 
 from app.models import Loja
+from app.permissions import IsGerenteOrAdministrador, get_user_group_name
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 
 User = get_user_model()
@@ -21,21 +25,33 @@ User = get_user_model()
 permission_classes = [IsAuthenticated]
 
 
-def get_user_group_name(user):
-    if user.is_superuser or user.groups.filter(name="Admin").exists():
-        return "Admin"
+class RelatorioPdfView(APIView):
+    """GET /gerar_pdf/ — relatório de pedidos de TODAS as lojas.
 
-    group = user.groups.first()
-    return group.name if group else None
+    Restrito a gerente/admin: o relatório é global, um responsável de loja
+    não deve enxergar os pedidos das outras.
+    """
+
+    permission_classes = [IsAuthenticated, IsGerenteOrAdministrador]
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        periodo = request.GET.get("periodo", "dia")
+        if periodo not in ("dia", "semana", "mes"):
+            periodo = "dia"
+
+        # Data de referência opcional (AAAA-MM-DD). Default: hoje.
+        data_ref = None
+        data_str = request.GET.get("data")
+        if data_str:
+            try:
+                data_ref = date.fromisoformat(data_str)
+            except ValueError:
+                return HttpResponseBadRequest("Parâmetro 'data' inválido; use AAAA-MM-DD.")
+
+        return gerar_relatorio_pedidos_pdf(periodo, data_ref)
 
 
-def relatorio_pdf(request: HttpRequest,) -> HttpResponse:
-    periodo = request.GET.get("periodo", "dia")
- 
-    if periodo not in ("dia", "semana", "mes"):
-        periodo = "dia"
- 
-    return gerar_relatorio_pedidos_pdf(periodo)
+relatorio_pdf = RelatorioPdfView.as_view()
  
  
 
@@ -52,11 +68,16 @@ class CookieTokenRefreshView(TokenRefreshView):
         try:
             serializer = TokenRefreshSerializer(data={"refresh": refresh_token})
             serializer.is_valid(raise_exception=True)
-            response = Response(serializer.validated_data, status=status.HTTP_200_OK)
         except TokenError as exc:
             raise InvalidToken(exc.args[0])
 
-        access_token = response.data.get("access")
+        # Token renovado vai apenas no cookie HTTP-only, nunca no corpo.
+        response = Response(
+            {"detail": "Token atualizado."},
+            status=status.HTTP_200_OK,
+        )
+
+        access_token = serializer.validated_data.get("access")
         if access_token:
             response.set_cookie(
                 key="access_token",
@@ -74,6 +95,8 @@ class CookieTokenRefreshView(TokenRefreshView):
 class LoginView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
 
     def post(self, request):
         email = request.data.get("email")
@@ -82,6 +105,13 @@ class LoginView(APIView):
         user = authenticate(username=email, password=password)
 
         if not user:
+            # Senha certa mas conta inativa = falta confirmar o email.
+            pendente = User.objects.filter(username=email, is_active=False).first()
+            if pendente and pendente.check_password(password):
+                return Response(
+                    {"error": "Conta ainda nao confirmada. Verifique o link enviado por email."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return Response(
                 {"error": "Credenciais invalidas"},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -104,6 +134,8 @@ class LoginView(APIView):
 
         loja_vinculada = Loja.objects.filter(responsavel=user).first()
 
+        # Tokens vao apenas nos cookies HTTP-only abaixo — nunca no corpo,
+        # para nao ficarem acessiveis ao JavaScript (roubo via XSS).
         response = Response(
             {
                 "message": "Login realizado com sucesso",
@@ -119,8 +151,6 @@ class LoginView(APIView):
                     if loja_vinculada
                     else None,
                 },
-                "access": str(access),
-                "refresh": str(refresh),
             }
         )
 

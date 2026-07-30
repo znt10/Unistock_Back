@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?defina MYSQL_ROOT_PASSWORD no .env}
-      MYSQL_DATABASE: p5
+      MYSQL_DATABASE: Unistock
     ports:
       - "127.0.0.1:3306:3306"
     volumes:
@@ -80,5 +80,56 @@ services:
       DB_HOST: db
       CELERY_BROKER_URL: redis://redis:6379/0
 
+  # --- Bot de WhatsApp (Evolution API, nao-oficial) ---
+  # Numero dedicado do bot: escaneia o QR code em http://localhost:3001
+  # (evolution-manager) na primeira vez que subir. Nao usa a API oficial da
+  # Meta — ver card "Conectar com zap" no Trello pro motivo da escolha.
+  evolution-db:
+    image: postgres:15
+    container_name: unistock_evolution_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:?defina EVOLUTION_POSTGRES_PASSWORD no .env}
+    volumes:
+      - evolution_pg_data:/var/lib/postgresql/data
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    container_name: unistock_evolution_api
+    restart: unless-stopped
+    depends_on:
+      - evolution-db
+      - redis
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD:?defina EVOLUTION_POSTGRES_PASSWORD no .env}@evolution-db:5432/evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/1
+    volumes:
+      - evolution_instances:/evolution/instances
+
+  evolution-manager:
+    image: evoapicloud/evolution-manager:latest
+    container_name: unistock_evolution_manager
+    restart: unless-stopped
+    depends_on:
+      - evolution-api
+    ports:
+      - "127.0.0.1:3001:80"
+    volumes:
+      # A imagem vem com um nginx.conf quebrado (gzip_proxied com valor
+      # invalido "must-revalidate", trava em loop de restart). Sobrescreve
+      # com uma versao corrigida ate a Evolution consertar isso upstream —
+      # https://github.com/EvolutionAPI/evolution-api/issues/2093
+      - ./docker/evolution-manager-nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
+
 volumes:
   mysql_data:
+  evolution_pg_data:
+  evolution_instances:

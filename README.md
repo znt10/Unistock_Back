@@ -77,6 +77,19 @@ Pontos que costumam pegar:
 - **`DB_HOST`** — dentro do Docker o compose sobrescreve para `db`. O valor do
   `.env` so vale se voce rodar o Django fora do container.
 - **`BOT_SERVICE_TOKEN`** — vazio desativa as rotas do bot de WhatsApp.
+- **`EVOLUTION_API_KEY` / `EVOLUTION_POSTGRES_PASSWORD`** — obrigatorias para
+  os servicos `evolution-*` subirem. Sem elas o `docker compose up` falha ao
+  criar esses containers.
+- **`EVOLUTION_INSTANCE`** — nome da instancia criada no Evolution Manager
+  (ex.: `Unistock`). Usado tanto pra mandar mensagem quanto pra registrar o
+  webhook.
+- **`EVOLUTION_WEBHOOK_TOKEN`** — segredo que vai na URL do webhook
+  (`/api/v1/bot/webhook/<token>/`). Gere um valor aleatorio e configure a
+  mesma URL completa (com o token) como webhook da instancia na Evolution API.
+- **`EVOLUTION_API_URL`** — vazio desativa o envio de resposta pelo bot
+  (o webhook processa o comando mas nao manda a resposta de volta). Dentro do
+  Docker o compose sobrescreve para `http://evolution-api:8080`; o valor do
+  `.env` so vale fora do container (ex.: testar via Postman).
 - **Email** — com `DEBUG=True` os emails saem no console do worker. Nao precisa
   de SMTP para desenvolver.
 
@@ -160,10 +173,19 @@ POST /api/v1/bot/contato/
 GET  /api/v1/bot/catalogo/
 POST /api/v1/bot/pedido/
 POST /api/v1/bot/pedido/<numero>/confirmar/
+POST /api/v1/bot/estoque/remover/
 GET  /api/v1/bot/relatorio/
+POST /api/v1/bot/webhook/<token>/    recebido da Evolution API, nao chamado direto
 ```
 
 Os recursos usam `public_id` (UUID) na URL, nao o id sequencial.
+
+O webhook (`app/api/v1/whatsapp_webhook.py`) e quem transforma o texto que a
+loja digita no WhatsApp em chamada pras rotas acima — comandos tipo `catalogo`,
+`pedido 12x2 7x1`, `confirmar 45`, `remover 12x1`. O `<token>` na URL e o
+`EVOLUTION_WEBHOOK_TOKEN`: precisa ser configurado como URL do webhook na
+instancia da Evolution API (Evolution Manager, ou `POST /webhook/instance` na
+propria Evolution API) — sem isso, mensagem recebida no WhatsApp nao chega aqui.
 
 ## Notificacoes assincronas (Celery + Redis)
 

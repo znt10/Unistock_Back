@@ -1,6 +1,7 @@
 """Endpoints de servico para o bot de WhatsApp.
 
-O bot Node autentica com um token de servico (header X-Bot-Token, valor em
+Chamados pelo webhook da Evolution API (app.api.v1.whatsapp_webhook), que
+autentica aqui com um token de servico (header X-Bot-Token, valor em
 BOT_SERVICE_TOKEN no .env) e informa o telefone de quem mandou a mensagem.
 
 O numero de WhatsApp e DA LOJA (Loja.telefone_whatsapp), nao do responsavel:

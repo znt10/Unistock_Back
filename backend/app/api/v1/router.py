@@ -1,6 +1,7 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .bot import BotCatalogoView, BotContatoView, BotEstoqueRemoverView, BotPedidoConfirmarView, BotPedidoView, BotRelatorioView
+from .whatsapp_webhook import EvolutionWebhookView
 from .views import CategoriaViewSet, EstoqueViewSet, LojaViewSet, MovimentacaoEstoqueViewSet, PedidoViewSet, ItemPedidoViewSet, PreferenciaNotificacaoViewSet, ProdutoViewSet, UsuarioViewSet, NotificacaoViewSet, VendaViewSet
 
 router = DefaultRouter()
@@ -23,4 +24,5 @@ urlpatterns = router.urls + [
     path('bot/pedido/<int:numero>/confirmar/', BotPedidoConfirmarView.as_view(), name='bot-pedido-confirmar'),
     path('bot/estoque/remover/', BotEstoqueRemoverView.as_view(), name='bot-estoque-remover'),
     path('bot/relatorio/', BotRelatorioView.as_view(), name='bot-relatorio'),
+    path('bot/webhook/<str:token>/', EvolutionWebhookView.as_view(), name='bot-webhook'),
 ]

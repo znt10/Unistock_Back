@@ -41,6 +41,9 @@ services:
     environment:
       DB_HOST: db
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Nome do container, nao localhost: e como a api enxerga a Evolution API
+      # de dentro da rede do compose (o valor do .env e pro host, ex. Postman).
+      EVOLUTION_API_URL: http://evolution-api:8080
 
   worker:
     build: .

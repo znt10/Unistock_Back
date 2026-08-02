@@ -42,7 +42,7 @@ class LojaQuerysetEscopoTests(TestCase):
         nomes = {loja["nome_loja"] for loja in resp.data.get("results", resp.data)}
         self.assertEqual(nomes, {"Loja A"})
 
-    def test_so_admin_muda_gerente_da_loja(self):
+    def test_gerente_nao_muda_gerente_da_loja(self):
         client = APIClient()
         client.force_authenticate(self.gerente)
         resp = client.patch(
@@ -52,7 +52,8 @@ class LojaQuerysetEscopoTests(TestCase):
         )
         self.assertEqual(resp.status_code, 403)
 
-    def test_admin_muda_gerente_da_loja(self):
+    def test_admin_tambem_nao_muda_gerente_da_loja(self):
+        """Gerente e definido so na criacao — admin so visualiza as lojas."""
         client = APIClient()
         client.force_authenticate(self.admin)
         resp = client.patch(
@@ -60,27 +61,30 @@ class LojaQuerysetEscopoTests(TestCase):
             {"gerente": self.outro_gerente.id},
             format="json",
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 403)
         self.loja_dele.refresh_from_db()
-        self.assertEqual(self.loja_dele.gerente_id, self.outro_gerente.id)
+        self.assertEqual(self.loja_dele.gerente_id, self.gerente.id)
 
-    def test_admin_nao_pode_salvar_gerente_com_usuario_que_nao_e_gerente(self):
+    def test_admin_nao_pode_criar_loja_com_gerente_que_nao_e_gerente(self):
         """gerente aceita qualquer User na FK — quem restringe e validate_gerente."""
         responsavel = User.objects.create_user(username="resp@x.com", password="123456")
         responsavel.groups.add(Group.objects.get(name="Responsavel"))
 
         client = APIClient()
         client.force_authenticate(self.admin)
-        resp = client.patch(
-            f"/api/v1/lojas/{self.loja_dele.public_id}/",
-            {"gerente": responsavel.id},
+        resp = client.post(
+            "/api/v1/lojas/",
+            {
+                "nome_loja": "Loja C",
+                "cidade": "Patos",
+                "endereco": "Rua 3",
+                "gerente": responsavel.id,
+            },
             format="json",
         )
 
         self.assertEqual(resp.status_code, 400, resp.data)
         self.assertIn("gerente", resp.data)
-        self.loja_dele.refresh_from_db()
-        self.assertEqual(self.loja_dele.gerente_id, self.gerente.id)
 
 
 class LojaDeleteTests(APITestCase):

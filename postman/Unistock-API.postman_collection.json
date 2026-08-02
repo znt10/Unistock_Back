@@ -1,0 +1,707 @@
+{
+  "info": {
+    "_postman_id": "b6a1a0a0-2f0e-4b1a-9f2a-0f0b7c1d9a11",
+    "name": "UniStock API",
+    "description": "Colecao completa da API do UniStock (Unistock_Back). Pastas por dominio, na mesma ordem do README.\n\nAutenticacao: JWT em cookies HTTP-only. Rode 'Login' primeiro (pasta Autenticacao) — o Postman guarda o cookie automaticamente e reusa nas outras chamadas, desde que 'baseUrl' aponte sempre pro mesmo host.\n\nBot de WhatsApp: nao usa cookie, usa o header X-Bot-Token (variavel {{botToken}} = valor de BOT_SERVICE_TOKEN no .env).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000", "type": "string" },
+    { "key": "email", "value": "", "type": "string" },
+    { "key": "password", "value": "", "type": "string" },
+    { "key": "botToken", "value": "", "type": "string" },
+    { "key": "webhookToken", "value": "", "type": "string" },
+    { "key": "telefoneLoja", "value": "", "type": "string" },
+    { "key": "telefoneGerente", "value": "", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "gerenteId", "value": "", "type": "string" },
+    { "key": "lojaId", "value": "", "type": "string" },
+    { "key": "categoriaId", "value": "", "type": "string" },
+    { "key": "produtoId", "value": "", "type": "string" },
+    { "key": "estoqueId", "value": "", "type": "string" },
+    { "key": "movimentacaoId", "value": "", "type": "string" },
+    { "key": "pedidoId", "value": "", "type": "string" },
+    { "key": "pedidoNumero", "value": "", "type": "string" },
+    { "key": "itemPedidoId", "value": "", "type": "string" },
+    { "key": "notificacaoId", "value": "", "type": "string" },
+    { "key": "confirmarToken", "value": "", "type": "string" },
+    { "key": "senhaToken", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Autenticacao",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/login/", "host": ["{{baseUrl}}"], "path": ["login", ""] },
+            "description": "Entra e recebe os cookies access_token/refresh_token/role (HTTP-only). Rode antes das demais chamadas autenticadas."
+          }
+        },
+        {
+          "name": "Renovar token (refresh)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/token/refresh/", "host": ["{{baseUrl}}"], "path": ["token", "refresh", ""] },
+            "description": "Renova o access_token usando o refresh_token do cookie."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/logout/", "host": ["{{baseUrl}}"], "path": ["logout", ""] },
+            "description": "Limpa os cookies access_token/refresh_token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Usuarios",
+      "item": [
+        {
+          "name": "Meus dados (me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/me/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "me", ""] }
+          }
+        },
+        {
+          "name": "Listar usuarios",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", ""] },
+            "description": "Escopo por get_queryset: Admin ve todos; Gerente ve so ele + responsaveis das lojas dele; Responsavel ve so ele mesmo."
+          }
+        },
+        {
+          "name": "Detalhe do usuario",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/{{userId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "{{userId}}", ""] }
+          }
+        },
+        {
+          "name": "Atualizar usuario",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Novo nome\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/user/{{userId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "{{userId}}", ""] }
+          }
+        },
+        {
+          "name": "Excluir usuario",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/{{userId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "{{userId}}", ""] }
+          }
+        },
+        {
+          "name": "Registrar gerente (so Admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Nome do Gerente\",\n  \"email\": \"gerente@exemplo.com\",\n  \"password\": \"senha-forte-123\",\n  \"tipo_usuario\": \"gerente\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/user/registrar/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "registrar", ""] },
+            "description": "Exclusivo do Admin. Responsavel de loja NAO se cria aqui — nasce junto com a Loja, a partir do email dela."
+          }
+        },
+        {
+          "name": "Estrutura (Gerente -> Lojas)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/estrutura/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "estrutura", ""] },
+            "description": "Arvore Gerente -> Lojas -> Responsavel, so Admin."
+          }
+        },
+        {
+          "name": "Confirmar conta (link do email)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/user/confirmar/{{confirmarToken}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "confirmar", "{{confirmarToken}}", ""] }
+          }
+        },
+        {
+          "name": "Esqueci a senha",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/user/esqueci-senha/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "esqueci-senha", ""] },
+            "description": "Sempre responde 200 (exista ou nao o email) para nao revelar quais contas existem."
+          }
+        },
+        {
+          "name": "Definir senha (link do email)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"senha-forte-123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/user/definir-senha/{{senhaToken}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "user", "definir-senha", "{{senhaToken}}", ""] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lojas",
+      "item": [
+        {
+          "name": "Listar lojas",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/lojas/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "lojas", ""] } }
+        },
+        {
+          "name": "Criar loja",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome_loja\": \"Loja Centro\",\n  \"tipo\": \"salgados\",\n  \"cidade\": \"Patos\",\n  \"endereco\": \"Rua A, 1\",\n  \"gerente\": \"{{gerenteId}}\",\n  \"telefone_whatsapp\": \"5583900000000\",\n  \"email\": \"lojacentro@exemplo.com\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/lojas/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "lojas", ""] },
+            "description": "'email' cria o acesso (login) da loja automaticamente. 'responsavel' e so leitura — nao se escolhe uma pessoa direto."
+          }
+        },
+        {
+          "name": "Detalhe da loja",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/lojas/{{lojaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "lojas", "{{lojaId}}", ""] } }
+        },
+        {
+          "name": "Atualizar loja",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ativo\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/lojas/{{lojaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "lojas", "{{lojaId}}", ""] }
+          }
+        },
+        {
+          "name": "Excluir loja",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/lojas/{{lojaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "lojas", "{{lojaId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Categorias",
+      "item": [
+        {
+          "name": "Listar categorias",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/categorias/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "categorias", ""] } }
+        },
+        {
+          "name": "Criar categoria",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Salgados grande\",\n  \"ordem\": 0\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/categorias/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "categorias", ""] }
+          }
+        },
+        {
+          "name": "Detalhe da categoria",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/categorias/{{categoriaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "categorias", "{{categoriaId}}", ""] } }
+        },
+        {
+          "name": "Atualizar categoria",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ordem\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/categorias/{{categoriaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "categorias", "{{categoriaId}}", ""] }
+          }
+        },
+        {
+          "name": "Excluir categoria",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/categorias/{{categoriaId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "categorias", "{{categoriaId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Produtos",
+      "item": [
+        {
+          "name": "Listar produtos",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/produtos/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "produtos", ""] } }
+        },
+        {
+          "name": "Criar produto",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome_produto\": \"Coxinha\",\n  \"unidade_medida\": \"UNIDADE\",\n  \"quantidade_por_embalagem\": null,\n  \"estoque_minimo_sugerido\": 1,\n  \"categoria\": \"{{categoriaId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/produtos/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "produtos", ""] },
+            "description": "unidade_medida: UNIDADE | CAIXA | PACOTE | QUILO | LITRO. quantidade_por_embalagem so faz sentido para CAIXA/PACOTE."
+          }
+        },
+        {
+          "name": "Detalhe do produto",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/produtos/{{produtoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "produtos", "{{produtoId}}", ""] } }
+        },
+        {
+          "name": "Atualizar produto",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"estoque_minimo_sugerido\": 5\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/produtos/{{produtoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "produtos", "{{produtoId}}", ""] }
+          }
+        },
+        {
+          "name": "Excluir produto",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/produtos/{{produtoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "produtos", "{{produtoId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Estoque",
+      "item": [
+        {
+          "name": "Listar estoque",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/estoque/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", ""] } }
+        },
+        {
+          "name": "Estoque baixo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/estoque/baixos/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", "baixos", ""] },
+            "description": "Produtos no ou abaixo do minimo, no escopo do usuario logado."
+          }
+        },
+        {
+          "name": "Criar estoque",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"produto\": \"{{produtoId}}\",\n  \"loja\": \"{{lojaId}}\",\n  \"quantidade_atual\": 100,\n  \"quantidade_minima\": 10,\n  \"estado\": \"NORMAL\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/estoque/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", ""] },
+            "description": "estado: NORMAL | CONGELADO | RESFRIADO."
+          }
+        },
+        {
+          "name": "Detalhe do estoque",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/estoque/{{estoqueId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", "{{estoqueId}}", ""] } }
+        },
+        {
+          "name": "Atualizar estoque (ajuste manual)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantidade_atual\": 90\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/estoque/{{estoqueId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", "{{estoqueId}}", ""] },
+            "description": "A diferenca vira uma MovimentacaoEstoque tipo AJUSTE automaticamente."
+          }
+        },
+        {
+          "name": "Excluir estoque",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/estoque/{{estoqueId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "estoque", "{{estoqueId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Movimentacoes",
+      "item": [
+        {
+          "name": "Listar movimentacoes",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/movimentacoes/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "movimentacoes", ""] } }
+        },
+        {
+          "name": "Filtrar por tipo e loja",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/movimentacoes/?tipo=SAIDA&loja={{lojaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "movimentacoes", ""],
+              "query": [
+                { "key": "tipo", "value": "SAIDA" },
+                { "key": "loja", "value": "{{lojaId}}" }
+              ]
+            },
+            "description": "tipo: ENTRADA | SAIDA | TRANSFERENCIA | AJUSTE | VENDA_PDV."
+          }
+        },
+        {
+          "name": "Detalhe da movimentacao",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/movimentacoes/{{movimentacaoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "movimentacoes", "{{movimentacaoId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Pedidos",
+      "item": [
+        {
+          "name": "Listar pedidos",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/pedidos/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", ""] } }
+        },
+        {
+          "name": "Filtrar pedidos (status/data/loja)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/pedidos/?status=PENDENTE&data=2026-08-01&loja={{lojaId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "pedidos", ""],
+              "query": [
+                { "key": "status", "value": "PENDENTE" },
+                { "key": "data", "value": "2026-08-01" },
+                { "key": "loja", "value": "{{lojaId}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Criar pedido",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loja\": \"{{lojaId}}\",\n  \"itens\": [\n    { \"produto\": \"{{produtoId}}\", \"quantidade\": 2 }\n  ],\n  \"descricao\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/pedidos/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", ""] }
+          }
+        },
+        {
+          "name": "Detalhe do pedido",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/pedidos/{{pedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", "{{pedidoId}}", ""] } }
+        },
+        {
+          "name": "Atualizar itens do pedido",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"itens\": [\n    { \"produto\": \"{{produtoId}}\", \"quantidade\": 3 }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/pedidos/{{pedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", "{{pedidoId}}", ""] }
+          }
+        },
+        {
+          "name": "Mudar status do pedido",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ENTREGUE\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/pedidos/{{pedidoId}}/status/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", "{{pedidoId}}", "status", ""] },
+            "description": "Regra de transicao + soma no estoque fica em services/pedidos.py (mesma logica usada pelo bot)."
+          }
+        },
+        {
+          "name": "Excluir pedido",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/pedidos/{{pedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pedidos", "{{pedidoId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Itens Pedido",
+      "item": [
+        {
+          "name": "Listar itens de pedido",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/itens-pedido/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "itens-pedido", ""] } }
+        },
+        {
+          "name": "Detalhe do item de pedido",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/itens-pedido/{{itemPedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "itens-pedido", "{{itemPedidoId}}", ""] } }
+        },
+        {
+          "name": "Atualizar item de pedido",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantidade\": 4\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/itens-pedido/{{itemPedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "itens-pedido", "{{itemPedidoId}}", ""] }
+          }
+        },
+        {
+          "name": "Excluir item de pedido",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/itens-pedido/{{itemPedidoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "itens-pedido", "{{itemPedidoId}}", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Vendas (PDV)",
+      "item": [
+        {
+          "name": "Finalizar venda",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loja_id\": \"{{lojaId}}\",\n  \"itens\": [\n    { \"produto_id\": \"{{produtoId}}\", \"quantidade\": 1 }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/vendas/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "vendas", ""] },
+            "description": "loja_id e opcional pra Responsavel (usa a propria loja); obrigatorio pra Admin/Gerente. Da baixa direto no estoque."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notificacoes",
+      "item": [
+        {
+          "name": "Listar notificacoes",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/notificacoes/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notificacoes", ""] } }
+        },
+        {
+          "name": "Detalhe da notificacao",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/notificacoes/{{notificacaoId}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notificacoes", "{{notificacaoId}}", ""] } }
+        },
+        {
+          "name": "Marcar como lida",
+          "request": { "method": "PATCH", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/notificacoes/{{notificacaoId}}/marcar-lida/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notificacoes", "{{notificacaoId}}", "marcar-lida", ""] } }
+        },
+        {
+          "name": "Marcar todas como lidas",
+          "request": { "method": "PATCH", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/notificacoes/todas-lidas/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notificacoes", "todas-lidas", ""] } }
+        },
+        {
+          "name": "Limpar notificacoes",
+          "request": { "method": "DELETE", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/notificacoes/limpar/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notificacoes", "limpar", ""] } }
+        }
+      ]
+    },
+    {
+      "name": "Preferencias de Notificacao",
+      "item": [
+        {
+          "name": "Ver preferencias",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/v1/preferencias-notificacao/me/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "preferencias-notificacao", "me", ""] } }
+        },
+        {
+          "name": "Atualizar preferencias",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email_ativo\": true,\n  \"whatsapp_ativo\": false,\n  \"telefone_whatsapp\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/preferencias-notificacao/me/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "preferencias-notificacao", "me", ""] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Relatorio (PDF)",
+      "item": [
+        {
+          "name": "Gerar relatorio de pedidos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/gerar_pdf/?periodo=dia&data=2026-08-01",
+              "host": ["{{baseUrl}}"],
+              "path": ["gerar_pdf", ""],
+              "query": [
+                { "key": "periodo", "value": "dia", "description": "dia | semana | mes" },
+                { "key": "data", "value": "2026-08-01", "description": "opcional, AAAA-MM-DD" }
+              ]
+            },
+            "description": "Restrito a Gerente/Admin — relatorio global de todas as lojas."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bot WhatsApp (Evolution API)",
+      "item": [
+        {
+          "name": "Identificar loja pelo telefone (contato)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Bot-Token", "value": "{{botToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/bot/contato/?telefone={{telefoneLoja}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "bot", "contato", ""],
+              "query": [{ "key": "telefone", "value": "{{telefoneLoja}}" }]
+            }
+          }
+        },
+        {
+          "name": "Catalogo",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Bot-Token", "value": "{{botToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/bot/catalogo/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "catalogo", ""] }
+          }
+        },
+        {
+          "name": "Criar pedido",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Bot-Token", "value": "{{botToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"telefone\": \"{{telefoneLoja}}\",\n  \"itens\": [\n    { \"codigo\": 1, \"quantidade\": 2 }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/bot/pedido/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "pedido", ""] },
+            "description": "'codigo' e o id inteiro do produto (o mesmo numero que aparece no catalogo)."
+          }
+        },
+        {
+          "name": "Confirmar pedido entregue",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Bot-Token", "value": "{{botToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"telefone\": \"{{telefoneLoja}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/bot/pedido/{{pedidoNumero}}/confirmar/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "pedido", "{{pedidoNumero}}", "confirmar", ""] }
+          }
+        },
+        {
+          "name": "Remover estoque (baixa manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Bot-Token", "value": "{{botToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"telefone\": \"{{telefoneLoja}}\",\n  \"itens\": [\n    { \"codigo\": 1, \"quantidade\": 1 }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/bot/estoque/remover/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "estoque", "remover", ""] }
+          }
+        },
+        {
+          "name": "Relatorio (so gerente)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Bot-Token", "value": "{{botToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/bot/relatorio/?telefone={{telefoneGerente}}&periodo=dia",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "bot", "relatorio", ""],
+              "query": [
+                { "key": "telefone", "value": "{{telefoneGerente}}" },
+                { "key": "periodo", "value": "dia", "description": "dia | semana | mes" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Webhook (simular mensagem da Evolution API)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"messages.upsert\",\n  \"data\": {\n    \"key\": {\n      \"remoteJid\": \"{{telefoneLoja}}@s.whatsapp.net\",\n      \"fromMe\": false\n    },\n    \"message\": {\n      \"conversation\": \"catalogo\"\n    }\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/bot/webhook/{{webhookToken}}/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "webhook", "{{webhookToken}}", ""] },
+            "description": "Nao chamado por voce em producao — a Evolution API que chama isso sozinha. Use pra simular/depurar sem precisar mandar WhatsApp de verdade. Comandos aceitos no 'conversation': catalogo, pedido <cod>x<qtd>, confirmar <numero>, remover <cod>x<qtd>."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Documentacao (schema)",
+      "item": [
+        {
+          "name": "Swagger UI",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/schema/swagger/", "host": ["{{baseUrl}}"], "path": ["api", "schema", "swagger", ""] } }
+        },
+        {
+          "name": "Redoc",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/schema/redoc/", "host": ["{{baseUrl}}"], "path": ["api", "schema", "redoc", ""] } }
+        },
+        {
+          "name": "Schema OpenAPI (JSON)",
+          "request": { "method": "GET", "header": [], "url": { "raw": "{{baseUrl}}/api/schema/", "host": ["{{baseUrl}}"], "path": ["api", "schema", ""] } }
+        }
+      ]
+    }
+  ]
+}

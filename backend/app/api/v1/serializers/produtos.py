@@ -21,7 +21,16 @@ class ProdutoSerializer(serializers.ModelSerializer):
             "estoque_minimo_sugerido",
             "categoria",
             "categoria_nome",
+            "gerente",
         ]
+        extra_kwargs = {"gerente": {"required": False}}
+
+    def validate_gerente(self, value):
+        # Mesma regra de Loja/Categoria: quem PODE mexer e checado na view
+        # (perform_update); aqui e so a regra de negocio.
+        if value is not None and not value.groups.filter(name="Gerente").exists():
+            raise serializers.ValidationError("Este usuario nao e um gerente.")
+        return value
 
     def validate(self, data):
         unidade = data.get(

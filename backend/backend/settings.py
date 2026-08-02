@@ -177,10 +177,6 @@ SPECTACULAR_SETTINGS = {
 # Vazio = endpoints do bot desativados (nega tudo).
 BOT_SERVICE_TOKEN = os.getenv("BOT_SERVICE_TOKEN", "")
 
-# Numero de WhatsApp do gerente. Recebe aviso de cada pedido novo e pode pedir
-# o PDF de TODAS as lojas. Vazio = sem gerente (sem aviso; relatorio so por loja).
-GERENTE_WHATSAPP = os.getenv("GERENTE_WHATSAPP", "")
-
 # ─── Evolution API (bot de WhatsApp, self-hosted, nao-oficial) ───────────────
 # URL do container evolution-api (nao a do evolution-manager/UI). No Docker
 # Compose o docker-compose.yml sobrescreve para http://evolution-api:8080.

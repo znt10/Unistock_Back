@@ -1,4 +1,5 @@
-from django.core.management.base import BaseCommand
+from django.contrib.auth.models import User
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from app.models import Categoria, Produto
@@ -102,11 +103,21 @@ class Command(BaseCommand):
             action="store_true",
             help="Remove todos os produtos antes de cadastrar a lista padrao.",
         )
+        parser.add_argument(
+            "--gerente",
+            help=(
+                "Email do gerente dono deste catalogo. Se omitido e so existir "
+                "um gerente no sistema, usa ele; com zero ou mais de um, precisa "
+                "informar explicitamente."
+            ),
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
+        gerente = self._resolver_gerente(options["gerente"])
+
         if options["limpar"]:
-            total_removidos, _ = Produto.objects.all().delete()
+            total_removidos, _ = Produto.objects.filter(gerente=gerente).delete()
             self.stdout.write(f"Registros removidos: {total_removidos}")
 
         criados = 0
@@ -114,7 +125,7 @@ class Command(BaseCommand):
 
         for indice, (nome_categoria, nomes) in enumerate(PRODUTOS.items()):
             categoria, _ = Categoria.objects.get_or_create(
-                nome=nome_categoria, defaults={"ordem": indice}
+                nome=nome_categoria, gerente=gerente, defaults={"ordem": indice}
             )
             for nome in nomes:
                 _, created = Produto.objects.update_or_create(
@@ -124,6 +135,7 @@ class Command(BaseCommand):
                         "unidade_medida": Produto.UnidadeMedida.UNIDADE,
                         "quantidade_por_embalagem": None,
                         "estoque_minimo_sugerido": 1,
+                        "gerente": gerente,
                     },
                 )
 
@@ -134,6 +146,25 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Produtos cadastrados. Criados: {criados}. Atualizados: {atualizados}."
+                f"Produtos cadastrados para {gerente.email}. "
+                f"Criados: {criados}. Atualizados: {atualizados}."
             )
+        )
+
+    def _resolver_gerente(self, email):
+        if email:
+            try:
+                return User.objects.get(email__iexact=email, groups__name="Gerente")
+            except User.DoesNotExist:
+                raise CommandError(f"Nenhum gerente encontrado com o email {email!r}.")
+
+        gerentes = User.objects.filter(groups__name="Gerente")
+        total = gerentes.count()
+        if total == 1:
+            return gerentes.first()
+        if total == 0:
+            raise CommandError("Nao ha nenhum gerente cadastrado ainda.")
+        raise CommandError(
+            "Mais de um gerente cadastrado — informe --gerente <email> pra "
+            "dizer de quem e este catalogo."
         )

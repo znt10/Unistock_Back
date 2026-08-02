@@ -602,7 +602,13 @@
           "request": {
             "method": "GET",
             "header": [{ "key": "X-Bot-Token", "value": "{{botToken}}" }],
-            "url": { "raw": "{{baseUrl}}/api/v1/bot/catalogo/", "host": ["{{baseUrl}}"], "path": ["api", "v1", "bot", "catalogo", ""] }
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/bot/catalogo/?telefone={{telefoneLoja}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "bot", "catalogo", ""],
+              "query": [{ "key": "telefone", "value": "{{telefoneLoja}}" }]
+            },
+            "description": "Catalogo e por empresa: devolve so o produto/categoria do mesmo gerente da loja desse telefone."
           }
         },
         {

@@ -82,12 +82,21 @@ def executar_comando(telefone, texto):
 
     if comando in ("catalogo", "catálogo", "menu", "produtos"):
         response = _chamar_view(BotCatalogoView, "get", "/api/v1/bot/catalogo/")
+        categorias = response.data.get("categorias", [])
+        if not categorias:
+            return "Catalogo vazio no momento."
+
         linhas = []
-        for categoria in response.data.get("categorias", []):
+        for categoria in categorias:
             linhas.append(f"*{categoria['nome']}*")
             for produto in categoria["produtos"]:
-                linhas.append(f"  {produto['codigo']} - {produto['nome']} ({produto['unidade']})")
-        return "\n".join(linhas) if linhas else "Catalogo vazio no momento."
+                # "UNIDADE" e o padrao/generico: so vale mostrar a unidade
+                # quando ela diz algo (CAIXA, PACOTE, QUILO, LITRO).
+                unidade = produto["unidade"]
+                sufixo = f" ({unidade})" if unidade != "UNIDADE" else ""
+                linhas.append(f"  {produto['codigo']} - {produto['nome']}{sufixo}")
+            linhas.append("")
+        return "\n".join(linhas).strip()
 
     if comando == "pedido":
         itens = _parse_itens(resto)
@@ -155,7 +164,20 @@ class EvolutionWebhookView(APIView):
         if not constant_time_compare(token, settings.EVOLUTION_WEBHOOK_TOKEN):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
-        payload = request.data or {}
+        try:
+            payload = request.data or {}
+        except Exception:
+            logger.warning(
+                "Webhook Evolution: corpo nao parseou como JSON. Content-Type=%r body=%r",
+                request.META.get("CONTENT_TYPE"),
+                request.body[:2000],
+            )
+            return Response(status=status.HTTP_200_OK)
+
+        if not isinstance(payload, dict):
+            logger.warning("Webhook Evolution: payload nao e objeto JSON: %r", payload)
+            return Response(status=status.HTTP_200_OK)
+
         evento = str(payload.get("event", "")).lower()
         if evento != "messages.upsert":
             return Response(status=status.HTTP_200_OK)

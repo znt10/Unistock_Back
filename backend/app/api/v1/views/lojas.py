@@ -50,16 +50,17 @@ class LojaViewSet(viewsets.ModelViewSet):
         if is_gerente(user) and not is_admin(user) and "gerente" not in self.request.data:
             # Gerente que cria a loja vira o dono dela por padrao — sem isso
             # ele perderia acesso de escrita a propria loja logo em seguida.
-            # Admin pode reatribuir depois pelo dashboard.
+            # O gerente da loja nao pode mais ser trocado depois (perform_update).
             serializer.save(gerente=user)
             return
 
         serializer.save()
 
     def perform_update(self, serializer):
-        user = self.request.user
-        if "gerente" in self.request.data and not is_admin(user):
-            raise PermissionDenied("Apenas admin pode definir o gerente da loja.")
+        if "gerente" in self.request.data:
+            raise PermissionDenied(
+                "O gerente da loja e definido na criacao e nao pode ser alterado."
+            )
         serializer.save()
 
     def destroy(self, request, *args, **kwargs):

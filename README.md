@@ -100,11 +100,18 @@ Todo usuario precisa estar em um grupo. Sem grupo, o login e recusado.
 | Grupo | Alcance |
 |---|---|
 | `Admin` | tudo, mais o Django Admin |
-| `Gerente` | todas as lojas: cria loja, cria usuario, relatorio geral |
-| `Responsavel` | apenas a propria loja |
+| `Gerente` | so as proprias lojas/produtos/categorias (`Loja.gerente`) |
+| `Responsavel` | apenas a propria loja, catalogo do gerente dela |
 
-O escopo do responsavel e aplicado no `queryset` de cada ViewSet, nao so na
-tela. Um responsavel que chame a API direto continua vendo so a loja dele.
+O escopo e aplicado no `queryset` de cada ViewSet, nao so na tela. Um usuario
+que chame a API direto continua vendo so o que e dele.
+
+Cada Gerente tem o proprio catalogo — `Produto` e `Categoria` tambem tem FK
+`gerente`, definida na criacao e imutavel depois (mesmo padrao de
+`Loja.gerente`). Um Responsavel ve o catalogo do gerente da propria loja; sem
+loja/gerente atribuido, nao ve nenhum. Isso vale tambem no bot de WhatsApp:
+`/bot/catalogo/` e `/bot/pedido/` so enxergam o produto da mesma empresa da
+loja que perguntou.
 
 ### Limites de taxa
 
@@ -170,7 +177,7 @@ Autenticadas por `BOT_SERVICE_TOKEN`, nao por JWT.
 
 ```text
 POST /api/v1/bot/contato/
-GET  /api/v1/bot/catalogo/
+GET  /api/v1/bot/catalogo/?telefone=...
 POST /api/v1/bot/pedido/
 POST /api/v1/bot/pedido/<numero>/confirmar/
 POST /api/v1/bot/estoque/remover/

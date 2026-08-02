@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
@@ -26,6 +26,12 @@ def evento_mensagem(texto, telefone=TELEFONE_LOJA, from_me=False):
 @patch("app.api.v1.whatsapp_webhook.enviar_mensagem")
 class WebhookEvolutionTests(APITestCase):
     def setUp(self):
+        Group.objects.get_or_create(name="Gerente")
+        self.gerente = User.objects.create_user(
+            username="gerente@email.com", email="gerente@email.com", password="123456",
+        )
+        self.gerente.groups.add(Group.objects.get(name="Gerente"))
+
         self.responsavel = User.objects.create_user(
             username="joao@email.com",
             email="joao@email.com",
@@ -37,14 +43,18 @@ class WebhookEvolutionTests(APITestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
+            gerente=self.gerente,
             telefone_whatsapp=TELEFONE_LOJA,
         )
-        self.categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        self.categoria = Categoria.objects.get_or_create(
+            nome="Salgados grande", gerente=self.gerente
+        )[0]
         self.coxinha = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             quantidade_por_embalagem=30,
             categoria=self.categoria,
+            gerente=self.gerente,
         )
 
     # --- controle de acesso ---

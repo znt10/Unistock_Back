@@ -52,11 +52,29 @@ class Categoria(BaseModel):
     categoria nova basta criar uma linha aqui, sem alterar codigo.
     """
 
-    nome = models.CharField(max_length=50, unique=True)
+    nome = models.CharField(max_length=50)
     ordem = models.PositiveIntegerField(default=0)
+    # Dono do catalogo: cada gerente tem as proprias categorias/produtos, sem
+    # ver os de outro gerente. Nullable pelo mesmo motivo de Loja.gerente —
+    # dado antigo sem dono definido ainda cai aqui (so o Admin ve, ate alguem
+    # atribuir). Mesmo padrao de Loja: definido na criacao, nao muda depois.
+    gerente = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="categorias_gerenciadas",
+    )
 
     class Meta:
         ordering = ["ordem", "nome"]
+        # Nao e mais unique=True sozinho: duas empresas podem ter categoria
+        # com o mesmo nome, cada uma na propria.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["nome", "gerente"], name="categoria_nome_unico_por_gerente"
+            ),
+        ]
 
     def __str__(self):
         return self.nome
@@ -82,6 +100,14 @@ class Produto(BaseModel):
         Categoria,
         on_delete=models.PROTECT,
         related_name="produtos",
+    )
+    # Mesmo dono-de-catalogo que Categoria.gerente — ver comentario la.
+    gerente = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="produtos_gerenciados",
     )
 
     def __str__(self):

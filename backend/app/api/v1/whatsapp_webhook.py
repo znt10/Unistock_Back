@@ -81,7 +81,11 @@ def executar_comando(telefone, texto):
     comando = comando.strip().lower()
 
     if comando in ("catalogo", "catálogo", "menu", "produtos"):
-        response = _chamar_view(BotCatalogoView, "get", "/api/v1/bot/catalogo/")
+        response = _chamar_view(
+            BotCatalogoView, "get", "/api/v1/bot/catalogo/", telefone=telefone
+        )
+        if response.status_code >= 400:
+            return f"Nao deu: {response.data.get('error', 'erro desconhecido')}"
         categorias = response.data.get("categorias", [])
         if not categorias:
             return "Catalogo vazio no momento."

@@ -22,7 +22,15 @@ from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Pedido, Produto
+from app.models import (
+    Categoria,
+    Estoque,
+    Loja,
+    MovimentacaoEstoque,
+    Pedido,
+    PreferenciaNotificacao,
+    Produto,
+)
 from app.notifications import notificar_estoque_baixo
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 from app.services.pedidos import TransicaoInvalida, mudar_status
@@ -34,22 +42,41 @@ def normalizar_telefone(valor):
 
 
 def eh_gerente(telefone):
-    """True se o telefone for o do gerente configurado (GERENTE_WHATSAPP)."""
-    numero = normalizar_telefone(settings.GERENTE_WHATSAPP)
-    return bool(numero) and normalizar_telefone(telefone) == numero
+    """True se o telefone for o WhatsApp cadastrado de algum Gerente.
+
+    Cada gerente configura o proprio numero em Preferencias de notificacao
+    (mesma tela/campo que ja existe para qualquer usuario) — nao existe mais
+    um unico numero global de gerente.
+    """
+    numero = normalizar_telefone(telefone)
+    if not numero:
+        return False
+    return PreferenciaNotificacao.objects.filter(
+        usuario__groups__name="Gerente", telefone_whatsapp=numero
+    ).exists()
 
 
 def notificacao_gerente(loja, pedido):
-    """Bloco pronto pro bot Node avisar o gerente, ou None se não há gerente."""
-    numero = normalizar_telefone(settings.GERENTE_WHATSAPP)
-    if not numero:
+    """Bloco pronto pro bot avisar o gerente DESTA loja, ou None se nao da.
+
+    Nao da quando: a loja nao tem gerente atribuido, o gerente nao configurou
+    telefone de WhatsApp, ou desativou o canal (whatsapp_ativo=False).
+    """
+    if not loja.gerente_id:
         return None
+
+    preferencia = PreferenciaNotificacao.objects.filter(
+        usuario_id=loja.gerente_id, whatsapp_ativo=True
+    ).exclude(telefone_whatsapp="").first()
+    if not preferencia:
+        return None
+
     linhas = [
         f"• {item.quantidade}x {item.produto.nome_produto}"
         for item in pedido.itens.all()
     ]
     mensagem = f"🧾 Novo pedido #{pedido.id} — {loja.nome_loja}\n" + "\n".join(linhas)
-    return {"telefone": numero, "mensagem": mensagem}
+    return {"telefone": preferencia.telefone_whatsapp, "mensagem": mensagem}
 
 
 class BotTokenPermission(BasePermission):
@@ -113,14 +140,22 @@ class BotContatoView(BotAPIView):
 
 
 class BotCatalogoView(BotAPIView):
-    """GET /api/v1/bot/catalogo/ — categorias e produtos para o menu do bot.
+    """GET /api/v1/bot/catalogo/?telefone=... — categorias e produtos do
+    gerente da loja que perguntou (cada empresa so ve o proprio catalogo).
 
     Usa o id inteiro do produto como codigo digitavel no chat.
     """
 
     def get(self, request):
+        loja = self.resolver_loja(request.query_params.get("telefone"))
+        if not loja:
+            return self.erro_loja()
+
+        if not loja.gerente_id:
+            return Response({"categorias": []})
+
         produtos = (
-            Produto.objects.filter(is_deleted=False)
+            Produto.objects.filter(is_deleted=False, gerente_id=loja.gerente_id)
             .select_related("categoria")
             .order_by("nome_produto")
         )
@@ -133,7 +168,9 @@ class BotCatalogoView(BotAPIView):
                 "quantidade_por_embalagem": produto.quantidade_por_embalagem,
             })
 
-        categorias_com_produtos = Categoria.objects.filter(id__in=por_categoria.keys())
+        categorias_com_produtos = Categoria.objects.filter(
+            id__in=por_categoria.keys(), gerente_id=loja.gerente_id
+        )
 
         categorias = [
             {
@@ -192,7 +229,12 @@ class BotPedidoView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
+            # gerente_id=loja.gerente_id: mesma barreira do catalogo — sem
+            # isso, uma loja poderia mexer no produto de outra empresa so
+            # adivinhando o codigo (id sequencial e digitavel de proposito).
+            produto = Produto.objects.filter(
+                id=codigo, is_deleted=False, gerente_id=loja.gerente_id
+            ).first()
             if not produto:
                 return Response(
                     {"error": f"Produto de codigo {codigo} nao encontrado."},
@@ -314,7 +356,12 @@ class BotEstoqueRemoverView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            produto = Produto.objects.filter(id=codigo, is_deleted=False).first()
+            # gerente_id=loja.gerente_id: mesma barreira do catalogo — sem
+            # isso, uma loja poderia mexer no produto de outra empresa so
+            # adivinhando o codigo (id sequencial e digitavel de proposito).
+            produto = Produto.objects.filter(
+                id=codigo, is_deleted=False, gerente_id=loja.gerente_id
+            ).first()
             if not produto:
                 return Response(
                     {"error": f"Produto de codigo {codigo} nao encontrado."},
@@ -375,10 +422,16 @@ class BotEstoqueRemoverView(BotAPIView):
 class BotRelatorioView(BotAPIView):
     """GET /api/v1/bot/relatorio/?telefone=...&periodo=dia|semana|mes&data=AAAA-MM-DD
 
-    Exclusivo do gerente (telefone == GERENTE_WHATSAPP): devolve o PDF de pedidos
-    de TODAS as lojas (o bot Node reenvia como documento no WhatsApp). Qualquer
-    outro telefone recebe 403. `periodo` default "dia"; `data` opcional escolhe um
-    dia/semana/mês específico (default = hoje).
+    Exclusivo do gerente (telefone cadastrado em PreferenciaNotificacao de
+    algum usuario do grupo Gerente, ver eh_gerente): devolve o PDF de pedidos.
+    Qualquer outro telefone recebe 403. `periodo` default "dia"; `data` opcional
+    escolhe um dia/semana/mês específico (default = hoje).
+
+    LIMITACAO CONHECIDA: o relatorio ainda e global (TODAS as lojas do banco,
+    nao so as do gerente que perguntou) — nao foi escopado por gerente junto
+    com o catalogo. Sem problema enquanto so existe um gerente; com mais de
+    um, cada um veria pedido de empresa alheia. Ver card "Multi-empresa" no
+    Trello.
     """
 
     def get(self, request):

@@ -1,10 +1,18 @@
 from unittest import skipUnless
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Pedido, Produto
+from app.models import (
+    Categoria,
+    Estoque,
+    Loja,
+    MovimentacaoEstoque,
+    Pedido,
+    PreferenciaNotificacao,
+    Produto,
+)
 
 try:
     import weasyprint  # noqa: F401
@@ -21,6 +29,12 @@ TELEFONE_GERENTE = "5583911112222"
 @override_settings(BOT_SERVICE_TOKEN=TOKEN)
 class BotApiTests(APITestCase):
     def setUp(self):
+        Group.objects.get_or_create(name="Gerente")
+        self.gerente = User.objects.create_user(
+            username="gerente@email.com", email="gerente@email.com", password="123456",
+        )
+        self.gerente.groups.add(Group.objects.get(name="Gerente"))
+
         self.responsavel = User.objects.create_user(
             username="joao@email.com",
             email="joao@email.com",
@@ -32,20 +46,32 @@ class BotApiTests(APITestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
+            gerente=self.gerente,
             telefone_whatsapp=TELEFONE_LOJA,
         )
-        self.cat_salgados = Categoria.objects.get_or_create(nome="Salgados grande")[0]
-        self.cat_mercado = Categoria.objects.get_or_create(nome="Mercado")[0]
+        self.cat_salgados = Categoria.objects.get_or_create(
+            nome="Salgados grande", gerente=self.gerente
+        )[0]
+        self.cat_mercado = Categoria.objects.get_or_create(
+            nome="Mercado", gerente=self.gerente
+        )[0]
         self.coxinha = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             quantidade_por_embalagem=30,
             categoria=self.cat_salgados,
+            gerente=self.gerente,
         )
         self.coca = Produto.objects.create(
             nome_produto="Coca 2L",
             unidade_medida=Produto.UnidadeMedida.UNIDADE,
             categoria=self.cat_mercado,
+            gerente=self.gerente,
+        )
+
+    def _dar_whatsapp_ao_gerente(self, telefone=TELEFONE_GERENTE):
+        return PreferenciaNotificacao.objects.create(
+            usuario=self.gerente, telefone_whatsapp=telefone, whatsapp_ativo=True
         )
 
     # --- autenticacao de servico ---
@@ -94,7 +120,9 @@ class BotApiTests(APITestCase):
     # --- catalogo ---
 
     def test_catalogo_agrupa_por_categoria(self):
-        response = self.client.get("/api/v1/bot/catalogo/", **HEADERS)
+        response = self.client.get(
+            "/api/v1/bot/catalogo/", {"telefone": TELEFONE_LOJA}, **HEADERS
+        )
         self.assertEqual(response.status_code, 200)
 
         categorias = {c["nome"]: c for c in response.data["categorias"]}
@@ -403,16 +431,16 @@ class BotApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
     def test_relatorio_loja_bloqueada_mesmo_com_gerente_403(self):
         # Loja continua sem acesso mesmo havendo gerente.
+        self._dar_whatsapp_ao_gerente()
         response = self.client.get(
             "/api/v1/bot/relatorio/", {"telefone": TELEFONE_LOJA}, **HEADERS
         )
         self.assertEqual(response.status_code, 403)
 
-    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
     def test_relatorio_data_invalida_400(self):
+        self._dar_whatsapp_ao_gerente()
         response = self.client.get(
             "/api/v1/bot/relatorio/",
             {"telefone": TELEFONE_GERENTE, "data": "2026-13-40"},
@@ -422,8 +450,8 @@ class BotApiTests(APITestCase):
 
     # --- gerente (recebe pedidos + relatorio de todas as lojas) ---
 
-    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
     def test_pedido_notifica_gerente(self):
+        self._dar_whatsapp_ao_gerente()
         response = self.client.post(
             "/api/v1/bot/pedido/",
             {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 3}]},
@@ -435,8 +463,10 @@ class BotApiTests(APITestCase):
         self.assertEqual(notif["telefone"], TELEFONE_GERENTE)
         self.assertIn("Coxinha", notif["mensagem"])
 
-    @override_settings(GERENTE_WHATSAPP="")
     def test_pedido_sem_gerente_nao_notifica(self):
+        # Gerente existe (self.gerente), mas nunca configurou o proprio
+        # WhatsApp em Preferencias — sem PreferenciaNotificacao, nao ha pra
+        # onde mandar.
         response = self.client.post(
             "/api/v1/bot/pedido/",
             {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 1}]},
@@ -446,9 +476,9 @@ class BotApiTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         self.assertNotIn("notificar_gerente", response.data)
 
-    @override_settings(GERENTE_WHATSAPP=TELEFONE_GERENTE)
     @skipUnless(HAS_WEASYPRINT, "weasyprint não instalado neste ambiente")
     def test_gerente_recebe_relatorio_de_todas_as_lojas(self):
+        self._dar_whatsapp_ao_gerente()
         Pedido.objects.create(responsavel=self.responsavel, loja=self.loja)
         response = self.client.get(
             "/api/v1/bot/relatorio/",

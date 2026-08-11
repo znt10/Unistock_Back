@@ -41,6 +41,13 @@ services:
     environment:
       DB_HOST: db
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Nome do container, nao localhost: e como a api enxerga a Evolution API
+      # de dentro da rede do compose (o valor do .env e pro host, ex. Postman).
+      EVOLUTION_API_URL: http://evolution-api:8080
+      # "api" precisa estar aqui pro Django aceitar a chamada do webhook: a
+      # Evolution API chama http://api:8000/..., e com DEBUG=False o Django
+      # rejeita com 400 (ALLOWED_HOSTS) qualquer Host que nao esteja na lista.
+      ALLOWED_HOSTS: localhost,127.0.0.1,0.0.0.0,api
 
   worker:
     build: .

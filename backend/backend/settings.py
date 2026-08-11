@@ -177,9 +177,15 @@ SPECTACULAR_SETTINGS = {
 # Vazio = endpoints do bot desativados (nega tudo).
 BOT_SERVICE_TOKEN = os.getenv("BOT_SERVICE_TOKEN", "")
 
-# Numero de WhatsApp do gerente. Recebe aviso de cada pedido novo e pode pedir
-# o PDF de TODAS as lojas. Vazio = sem gerente (sem aviso; relatorio so por loja).
-GERENTE_WHATSAPP = os.getenv("GERENTE_WHATSAPP", "")
+# ─── Evolution API (bot de WhatsApp, self-hosted, nao-oficial) ───────────────
+# URL do container evolution-api (nao a do evolution-manager/UI). No Docker
+# Compose o docker-compose.yml sobrescreve para http://evolution-api:8080.
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "")
+EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
+EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "")
+# Segredo na URL do webhook (/api/v1/bot/webhook/<token>/). Sem ele, qualquer
+# um que descobrisse a rota conseguiria simular mensagem de qualquer loja.
+EVOLUTION_WEBHOOK_TOKEN = os.getenv("EVOLUTION_WEBHOOK_TOKEN", "")
 
 # ─── Celery / Redis ───────────────────────────────────────────────────────────
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")

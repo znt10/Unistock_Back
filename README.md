@@ -28,7 +28,6 @@ corpo da resposta, para nao ficar acessivel ao JavaScript.
 | MySQL 8 | banco |
 | Celery + Redis | email assincrono e tarefas agendadas |
 | drf-spectacular | schema OpenAPI e Swagger |
-| Evolution API (self-hosted) | bot de WhatsApp — nao usa a API oficial da Meta |
 | Docker Compose | sobe tudo junto |
 
 ## Como rodar
@@ -85,6 +84,16 @@ Pontos que costumam pegar:
 - **`EVOLUTION_API_KEY` / `EVOLUTION_POSTGRES_PASSWORD`** — obrigatorias para
   os servicos `evolution-*` subirem. Sem elas o `docker compose up` falha ao
   criar esses containers.
+- **`EVOLUTION_INSTANCE`** — nome da instancia criada no Evolution Manager
+  (ex.: `Unistock`). Usado tanto pra mandar mensagem quanto pra registrar o
+  webhook.
+- **`EVOLUTION_WEBHOOK_TOKEN`** — segredo que vai na URL do webhook
+  (`/api/v1/bot/webhook/<token>/`). Gere um valor aleatorio e configure a
+  mesma URL completa (com o token) como webhook da instancia na Evolution API.
+- **`EVOLUTION_API_URL`** — vazio desativa o envio de resposta pelo bot
+  (o webhook processa o comando mas nao manda a resposta de volta). Dentro do
+  Docker o compose sobrescreve para `http://evolution-api:8080`; o valor do
+  `.env` so vale fora do container (ex.: testar via Postman).
 - **Email** — com `DEBUG=True` os emails saem no console do worker. Nao precisa
   de SMTP para desenvolver.
 
@@ -95,11 +104,18 @@ Todo usuario precisa estar em um grupo. Sem grupo, o login e recusado.
 | Grupo | Alcance |
 |---|---|
 | `Admin` | tudo, mais o Django Admin |
-| `Gerente` | todas as lojas: cria loja, cria usuario, relatorio geral |
-| `Responsavel` | apenas a propria loja |
+| `Gerente` | so as proprias lojas/produtos/categorias (`Loja.gerente`) |
+| `Responsavel` | apenas a propria loja, catalogo do gerente dela |
 
-O escopo do responsavel e aplicado no `queryset` de cada ViewSet, nao so na
-tela. Um responsavel que chame a API direto continua vendo so a loja dele.
+O escopo e aplicado no `queryset` de cada ViewSet, nao so na tela. Um usuario
+que chame a API direto continua vendo so o que e dele.
+
+Cada Gerente tem o proprio catalogo — `Produto` e `Categoria` tambem tem FK
+`gerente`, definida na criacao e imutavel depois (mesmo padrao de
+`Loja.gerente`). Um Responsavel ve o catalogo do gerente da propria loja; sem
+loja/gerente atribuido, nao ve nenhum. Isso vale tambem no bot de WhatsApp:
+`/bot/catalogo/` e `/bot/pedido/` so enxergam o produto da mesma empresa da
+loja que perguntou.
 
 ### Limites de taxa
 
@@ -165,13 +181,22 @@ Autenticadas por `BOT_SERVICE_TOKEN`, nao por JWT.
 
 ```text
 POST /api/v1/bot/contato/
-GET  /api/v1/bot/catalogo/
+GET  /api/v1/bot/catalogo/?telefone=...
 POST /api/v1/bot/pedido/
 POST /api/v1/bot/pedido/<numero>/confirmar/
+POST /api/v1/bot/estoque/remover/
 GET  /api/v1/bot/relatorio/
+POST /api/v1/bot/webhook/<token>/    recebido da Evolution API, nao chamado direto
 ```
 
 Os recursos usam `public_id` (UUID) na URL, nao o id sequencial.
+
+O webhook (`app/api/v1/whatsapp_webhook.py`) e quem transforma o texto que a
+loja digita no WhatsApp em chamada pras rotas acima — comandos tipo `catalogo`,
+`pedido 12x2 7x1`, `confirmar 45`, `remover 12x1`. O `<token>` na URL e o
+`EVOLUTION_WEBHOOK_TOKEN`: precisa ser configurado como URL do webhook na
+instancia da Evolution API (Evolution Manager, ou `POST /webhook/instance` na
+propria Evolution API) — sem isso, mensagem recebida no WhatsApp nao chega aqui.
 
 ## Notificacoes assincronas (Celery + Redis)
 

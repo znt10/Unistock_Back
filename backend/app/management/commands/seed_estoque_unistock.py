@@ -48,15 +48,22 @@ class Command(BaseCommand):
         if not lojas.exists():
             raise CommandError("Nenhuma loja ativa encontrada.")
 
-        produtos = Produto.objects.all().order_by("categoria__nome", "nome_produto")
-        if not produtos.exists():
-            raise CommandError("Nenhum produto encontrado.")
-
         criados = 0
         atualizados = 0
         ignorados = 0
 
         for loja in lojas:
+            # So produtos do MESMO gerente da loja: cruzar com o catalogo de
+            # outra empresa criaria estoque de produto que a loja nao vende.
+            produtos = Produto.objects.filter(
+                gerente_id=loja.gerente_id
+            ).order_by("categoria__nome", "nome_produto")
+            if not produtos.exists():
+                self.stdout.write(
+                    f"Loja {loja.nome_loja}: sem produtos do gerente, pulando."
+                )
+                continue
+
             for produto in produtos:
                 estoque, created = Estoque.objects.get_or_create(
                     loja=loja,

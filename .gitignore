@@ -28,3 +28,6 @@ db.sqlite3-journal
 
 # Docs internos de planejamento (specs/plans de sessao) — nao vao pro repo
 docs/superpowers/
+
+# Configuracao local do Claude Code (nao vai pro repo)
+.claude/

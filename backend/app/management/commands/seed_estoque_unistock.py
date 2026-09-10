@@ -53,14 +53,14 @@ class Command(BaseCommand):
         ignorados = 0
 
         for loja in lojas:
-            # So produtos do MESMO gerente da loja: cruzar com o catalogo de
+            # So produtos da MESMA empresa da loja: cruzar com o catalogo de
             # outra empresa criaria estoque de produto que a loja nao vende.
             produtos = Produto.objects.filter(
-                gerente_id=loja.gerente_id
+                conta_id=loja.conta_id
             ).order_by("categoria__nome", "nome_produto")
             if not produtos.exists():
                 self.stdout.write(
-                    f"Loja {loja.nome_loja}: sem produtos do gerente, pulando."
+                    f"Loja {loja.nome_loja}: sem produtos da empresa, pulando."
                 )
                 continue
 

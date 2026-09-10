@@ -8,9 +8,10 @@ from rest_framework.response import Response
 from app.models import Estoque, Loja, MovimentacaoEstoque
 from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
+    escopar_por_conta,
+    get_conta_do_usuario,
     is_admin,
     is_gerente,
-    is_gerente_ou_admin,
 )
 from ..serializers import (
     EstoqueBaixoSerializer,
@@ -40,14 +41,14 @@ class EstoqueViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Estoque.objects.all()
 
-        if is_admin(user):
-            return queryset
-        if is_gerente(user):
-            return queryset.filter(loja__gerente=user)
+        # O Responsavel continua vendo so a LOJA dele, nao a conta inteira:
+        # ele opera um balcao, nao administra a empresa. Para os demais, o
+        # escopo e a conta — Estoque chega nela pela loja, sem FK propria.
+        if not is_admin(user) and not is_gerente(user):
+            return Estoque.objects.filter(loja__responsavel=user)
 
-        return queryset.filter(loja__responsavel=user)
+        return escopar_por_conta(Estoque.objects.all(), user, campo="loja__conta")
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
@@ -62,11 +63,23 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         estoques = self.get_queryset().baixos()
         return Response(EstoqueBaixoSerializer(estoques, many=True).data)
 
+    @action(detail=False, methods=['get'], url_path='excedidos')
+    def excedidos(self, request):
+        """Produtos ACIMA do maximo, no mesmo escopo.
+
+        O motivo de existir e validade, nao espaco: parado demais estraga. Sai
+        pelo mesmo serializer da falta — a tela mostra as duas listas com as
+        mesmas colunas, e quem le compara sem trocar de vocabulario.
+        """
+        estoques = self.get_queryset().excedidos()
+        return Response(EstoqueBaixoSerializer(estoques, many=True).data)
+
     def _validar_loja_do_responsavel(self, user, loja):
         if is_admin(user):
             return
         if is_gerente(user):
-            if not loja or loja.gerente_id != user.id:
+            conta = get_conta_do_usuario(user)
+            if not loja or not conta or loja.conta_id != conta.id:
                 raise PermissionDenied("Voce so pode editar o estoque das suas lojas.")
             return
 
@@ -105,11 +118,14 @@ class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         user = self.request.user
-        if is_gerente(user) and not is_admin(user):
-            minhas = Loja.objects.filter(gerente=user)
-            qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
-        elif not is_gerente_ou_admin(user):
-            minhas = Loja.objects.filter(responsavel=user)
+        if not is_admin(user):
+            # Movimentacao aponta para DUAS lojas (origem e destino), e uma
+            # transferencia entre contas diferentes tem que aparecer para as
+            # duas — por isso o OR, e nao um filtro unico de conta.
+            if is_gerente(user):
+                minhas = escopar_por_conta(Loja.objects.all(), user)
+            else:
+                minhas = Loja.objects.filter(responsavel=user)
             qs = qs.filter(Q(loja_origem__in=minhas) | Q(loja_destino__in=minhas))
 
         tipo = self.request.query_params.get('tipo')

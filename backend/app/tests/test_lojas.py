@@ -3,29 +3,26 @@ from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
 from app.models import Categoria, Loja, MovimentacaoEstoque, Produto
+from app.tests.fabricas import criar_admin, criar_conta, criar_gerente
 
 
 class LojaQuerysetEscopoTests(TestCase):
     def setUp(self):
-        for nome in ("Admin", "Gerente", "Responsavel"):
-            Group.objects.get_or_create(name=nome)
+        self.conta = criar_conta("Empresa A")
+        self.conta_alheia = criar_conta("Empresa B")
 
-        self.admin = User.objects.create_user(username="admin@x.com", password="123456")
-        self.admin.groups.add(Group.objects.get(name="Admin"))
-
-        self.gerente = User.objects.create_user(username="ger@x.com", password="123456")
-        self.gerente.groups.add(Group.objects.get(name="Gerente"))
-
-        self.outro_gerente = User.objects.create_user(username="ger2@x.com", password="123456")
-        self.outro_gerente.groups.add(Group.objects.get(name="Gerente"))
+        self.admin = criar_admin("admin@x.com")
+        self.gerente = criar_gerente("ger@x.com", self.conta)
+        self.colega = criar_gerente("colega@x.com", self.conta)
+        self.outro_gerente = criar_gerente("ger2@x.com", self.conta_alheia)
 
         self.loja_dele = Loja.objects.create(
             nome_loja="Loja A", cidade="Patos", endereco="Rua 1",
-            gerente=self.gerente,
+            conta=self.conta,
         )
         self.loja_alheia = Loja.objects.create(
             nome_loja="Loja B", cidade="Patos", endereco="Rua 2",
-            gerente=self.outro_gerente,
+            conta=self.conta_alheia,
         )
 
     def test_admin_ve_todas_as_lojas(self):
@@ -42,73 +39,91 @@ class LojaQuerysetEscopoTests(TestCase):
         nomes = {loja["nome_loja"] for loja in resp.data.get("results", resp.data)}
         self.assertEqual(nomes, {"Loja A"})
 
-    def test_gerente_nao_muda_gerente_da_loja(self):
+    def test_colega_da_mesma_empresa_ve_as_mesmas_lojas(self):
+        """Dois gerentes numa empresa compartilham as lojas dela.
+
+        No modelo antigo (Loja.gerente = pessoa) o colega via zero lojas: elas
+        pertenciam a outra pessoa, nao a empresa.
+        """
+        client = APIClient()
+        client.force_authenticate(self.colega)
+        resp = client.get("/api/v1/lojas/")
+        nomes = {loja["nome_loja"] for loja in resp.data.get("results", resp.data)}
+        self.assertEqual(nomes, {"Loja A"})
+
+    def test_empresa_da_loja_nao_muda_pelo_corpo_do_request(self):
+        """`conta` e read_only: mandar outra empresa nao move a loja.
+
+        Substitui o antigo 403 de "o gerente da loja nao pode ser alterado".
+        A barreira ficou mais forte: nao depende de a view lembrar de checar,
+        o campo simplesmente nao entra pelo serializer.
+        """
         client = APIClient()
         client.force_authenticate(self.gerente)
         resp = client.patch(
             f"/api/v1/lojas/{self.loja_dele.public_id}/",
-            {"gerente": self.outro_gerente.id},
+            {"conta": str(self.conta_alheia.public_id)},
             format="json",
         )
-        self.assertEqual(resp.status_code, 403)
-
-    def test_admin_tambem_nao_muda_gerente_da_loja(self):
-        """Gerente e definido so na criacao — admin so visualiza as lojas."""
-        client = APIClient()
-        client.force_authenticate(self.admin)
-        resp = client.patch(
-            f"/api/v1/lojas/{self.loja_dele.public_id}/",
-            {"gerente": self.outro_gerente.id},
-            format="json",
-        )
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 200, resp.data)
         self.loja_dele.refresh_from_db()
-        self.assertEqual(self.loja_dele.gerente_id, self.gerente.id)
+        self.assertEqual(self.loja_dele.conta_id, self.conta.id)
 
-    def test_admin_nao_pode_criar_loja_com_gerente_que_nao_e_gerente(self):
-        """gerente aceita qualquer User na FK — quem restringe e validate_gerente."""
-        responsavel = User.objects.create_user(username="resp@x.com", password="123456")
-        responsavel.groups.add(Group.objects.get(name="Responsavel"))
-
+    def test_gerente_cria_loja_na_propria_empresa(self):
+        """A empresa vem de quem cria, e nao de um id no corpo."""
         client = APIClient()
-        client.force_authenticate(self.admin)
+        client.force_authenticate(self.gerente)
         resp = client.post(
             "/api/v1/lojas/",
             {
                 "nome_loja": "Loja C",
                 "cidade": "Patos",
                 "endereco": "Rua 3",
-                "gerente": responsavel.id,
+                "conta": str(self.conta_alheia.public_id),
             },
             format="json",
         )
 
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(
+            Loja.objects.get(nome_loja="Loja C").conta_id, self.conta.id
+        )
+
+    def test_admin_precisa_dizer_a_empresa_ao_criar_loja(self):
+        """Admin nao tem conta propria: sem informar, e 400 e nao uma loja orfa."""
+        client = APIClient()
+        client.force_authenticate(self.admin)
+        resp = client.post(
+            "/api/v1/lojas/",
+            {"nome_loja": "Loja D", "cidade": "Patos", "endereco": "Rua 4"},
+            format="json",
+        )
+
         self.assertEqual(resp.status_code, 400, resp.data)
-        self.assertIn("gerente", resp.data)
+        self.assertIn("conta", resp.data)
 
 
 class LojaDeleteTests(APITestCase):
     """DELETE /api/v1/lojas/<id>/ nao pode estourar 500 quando ha historico."""
 
     def setUp(self):
-        grupo_admin, _ = Group.objects.get_or_create(name="Admin")
-        self.admin = User.objects.create_user(username="admin", password="123456")
-        self.admin.groups.add(grupo_admin)
+        self.conta = criar_conta()
+        self.admin = criar_admin("admin")
         self.client.force_authenticate(self.admin)
 
-        categoria = Categoria.objects.get_or_create(nome="Mercado")[0]
-        self.produto = Produto.objects.create(nome_produto="Coca", categoria=categoria)
+        categoria = Categoria.objects.create(nome="Mercado", conta=self.conta)
+        self.produto = Produto.objects.create(nome_produto="Coca", categoria=categoria, conta=self.conta)
 
     def test_nao_permite_excluir_loja_com_historico_de_movimentacao(self):
         loja = Loja.objects.create(
             nome_loja="Loja Com Historico", cidade="Patos", endereco="Rua 1",
+            conta=self.conta,
         )
         MovimentacaoEstoque.objects.create(
             tipo=MovimentacaoEstoque.Tipo.ENTRADA,
             produto=self.produto,
             loja_destino=loja,
-            quantidade=5,
-        )
+            quantidade=5,)
 
         response = self.client.delete(f"/api/v1/lojas/{loja.public_id}/")
 
@@ -119,6 +134,7 @@ class LojaDeleteTests(APITestCase):
     def test_permite_excluir_loja_sem_historico(self):
         loja = Loja.objects.create(
             nome_loja="Loja Sem Historico", cidade="Patos", endereco="Rua 2",
+            conta=self.conta,
         )
 
         response = self.client.delete(f"/api/v1/lojas/{loja.public_id}/")

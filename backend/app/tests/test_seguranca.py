@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group, User
 from rest_framework.test import APITestCase
 
 from app.models import Categoria, Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
+from app.tests.fabricas import criar_conta, vincular
 from app.notifications import notificar_estoque_baixo
 
 try:
@@ -15,11 +16,13 @@ except Exception:
 
 class EndpointsProtegidosTests(APITestCase):
     def setUp(self):
+        self.conta = criar_conta()
         grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
         Group.objects.get_or_create(name='Responsavel')
 
         self.gerente = User.objects.create_user(username='ger@email.com', password='123')
         self.gerente.groups.add(grupo_gerente)
+        vincular(self.gerente, self.conta)
         self.responsavel = User.objects.create_user(username='resp@email.com', password='123')
 
     # --- /gerar_pdf/ ---
@@ -63,19 +66,20 @@ class NotificacaoPorFkTests(APITestCase):
     """Dedup e limpeza do alerta de estoque baixo pela FK, nao por texto."""
 
     def setUp(self):
+        self.conta = criar_conta()
         self.user = User.objects.create_user(
             username='fk@email.com', email='fk@email.com', password='123',
         )
         self.loja = Loja.objects.create(
             nome_loja='Loja FK', cidade='Patos', endereco='Rua 1',
             responsavel=self.user,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
-        self.produto = Produto.objects.create(nome_produto='Coca', categoria=categoria)
+        categoria = Categoria.objects.create(nome='Mercado', conta=self.conta)
+        self.produto = Produto.objects.create(nome_produto='Coca', categoria=categoria, conta=self.conta)
         self.estoque = Estoque.objects.create(
             loja=self.loja, produto=self.produto,
-            quantidade_atual=1, quantidade_minima=5,
-        )
+            quantidade_atual=1, quantidade_minima=5, quantidade_maxima=999,)
 
     def test_notificacao_gravada_com_fk_e_dedup(self):
         notificar_estoque_baixo(self.estoque)
@@ -94,15 +98,14 @@ class NotificacaoPorFkTests(APITestCase):
         outra_loja = Loja.objects.create(
             nome_loja='Loja Outra', cidade='Patos', endereco='Rua 2',
             responsavel=outro,
+            conta=self.conta,
         )
         minha = MovimentacaoEstoque.objects.create(
             tipo=MovimentacaoEstoque.Tipo.ENTRADA, produto=self.produto,
-            loja_destino=self.loja, quantidade=5, usuario=self.user,
-        )
+            loja_destino=self.loja, quantidade=5, usuario=self.user,)
         MovimentacaoEstoque.objects.create(
             tipo=MovimentacaoEstoque.Tipo.ENTRADA, produto=self.produto,
-            loja_destino=outra_loja, quantidade=7, usuario=outro,
-        )
+            loja_destino=outra_loja, quantidade=7, usuario=outro,)
 
         # Sem login nega
         response = self.client.get('/api/v1/movimentacoes/')
@@ -119,6 +122,7 @@ class NotificacaoPorFkTests(APITestCase):
         admin = User.objects.create_user(username='adm@email.com', password='123')
         grupo, _ = Group.objects.get_or_create(name='Admin')
         admin.groups.add(grupo)
+        vincular(admin, self.conta)
         self.client.force_authenticate(admin)
         response = self.client.get('/api/v1/movimentacoes/')
         self.assertEqual(len(response.data['results']), 2)

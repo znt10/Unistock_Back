@@ -3,6 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
+from app.services.estoque_teto import conferir_teto
 from app.models import ItemPedido, Loja, Notificacao, Pedido, Produto
 from app.notifications import notificar_estoques_baixos_do_pedido
 
@@ -83,8 +84,27 @@ class PedidoWriteSerializer(PedidoSerializer):
 class PedidoCreateSerializer(PedidoWriteSerializer):
     """Serializer para criacao de pedidos."""
 
+    # Nao e campo do modelo: e a resposta ao aviso de excesso. Write-only
+    # porque nao faz sentido nenhum devolve-lo na leitura do pedido.
+    confirmar_excesso = serializers.BooleanField(
+        write_only=True, required=False, default=False
+    )
+
+    class Meta(PedidoWriteSerializer.Meta):
+        fields = PedidoWriteSerializer.Meta.fields + ["confirmar_excesso"]
+
+    def validate(self, data):
+        data = super().validate(data)
+        conferir_teto(
+            data["loja"],
+            data["itens"],
+            confirmado=data.get("confirmar_excesso", False),
+        )
+        return data
+
     @transaction.atomic
     def create(self, validated_data):
+        validated_data.pop("confirmar_excesso", None)
         itens_data = validated_data.pop("itens")
         user = self.context["request"].user
 
@@ -99,8 +119,15 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
 
         notificar_estoques_baixos_do_pedido(pedido, usuario_editor=user)
 
+        # Quem e avisado: a gerencia DESTA empresa, mais o superuser (dono da
+        # plataforma, que nao pertence a conta nenhuma). Antes da camada de
+        # Conta isto pegava todo Gerente/Admin do sistema, entao um pedido de
+        # uma empresa aparecia na caixa de notificacao das outras.
         gerentes = (
-            User.objects.filter(groups__name__in=["Admin", "Gerente"])
+            User.objects.filter(
+                groups__name__in=["Admin", "Gerente"],
+                perfil__conta_id=pedido.loja.conta_id,
+            )
             | User.objects.filter(is_superuser=True)
         ).distinct()
 

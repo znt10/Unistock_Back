@@ -62,6 +62,8 @@ def _css() -> str:
     .atual       { color: #b91c1c; font-weight: 800; font-size: 13px; }
     .zerado      { background: #fee2e2 !important; color: #7f1d1d; }
     .repor       { color: #047857; font-weight: 800; font-size: 12px; }
+    .sobra       { color: #b45309; font-weight: 800; font-size: 12px; }
+    .acima       { color: #b45309; font-weight: 800; font-size: 13px; }
     .empty { border: 1px solid #d1d5db; color: #9ca3af; font-size: 12px; padding: 32px; text-align: center; }
     """
 
@@ -84,14 +86,33 @@ def _linhas_da_loja(estoques) -> str:
     return linhas
 
 
-def _html(estoques, titulo: str, subtitulo: str) -> str:
+def _linhas_excedidas(estoques) -> str:
+    linhas = ""
+    for estoque in estoques:
+        sobra = max(estoque.quantidade_atual - estoque.quantidade_maxima, 0)
+        linhas += f"""
+          <tr>
+            <td class="col-produto">{escape(estoque.produto.nome_produto)}</td>
+            <td class="col-num acima">{estoque.quantidade_atual}</td>
+            <td class="col-num">{estoque.quantidade_maxima}</td>
+            <td class="col-num sobra">{sobra}</td>
+          </tr>
+        """
+    return linhas
+
+
+def _secoes(estoques, colunas, linhas_de, vazio) -> str:
+    """Um bloco por loja, com o cabecalho de colunas que o assunto pede."""
     por_loja = defaultdict(list)
     for estoque in estoques:
         por_loja[estoque.loja.nome_loja].append(estoque)
 
-    lojas_html = ""
+    html = ""
     for nome_loja, itens in por_loja.items():
-        lojas_html += f"""
+        cabecalho = "".join(
+            f'<th class="col-num">{coluna}</th>' for coluna in colunas[1:]
+        )
+        html += f"""
           <section class="store">
             <div class="store-header">
               <span class="store-stat"><b>{len(itens)}</b> itens</span>
@@ -100,18 +121,44 @@ def _html(estoques, titulo: str, subtitulo: str) -> str:
             <table>
               <thead>
                 <tr>
-                  <th class="col-produto">Produto</th>
-                  <th class="col-num">Em estoque</th>
-                  <th class="col-num">Mínimo</th>
-                  <th class="col-num">Repor</th>
+                  <th class="col-produto">{colunas[0]}</th>
+                  {cabecalho}
                 </tr>
               </thead>
-              <tbody>{_linhas_da_loja(itens)}</tbody>
+              <tbody>{linhas_de(itens)}</tbody>
             </table>
           </section>
         """
 
-    corpo = lojas_html or '<div class="empty">Nenhum produto abaixo do estoque mínimo.</div>'
+    return html or f'<div class="empty">{vazio}</div>'
+
+
+def _html(estoques, titulo: str, subtitulo: str, excedidos=()) -> str:
+    excedidos = list(excedidos)
+
+    corpo = _secoes(
+        estoques,
+        ("Produto", "Em estoque", "Mínimo", "Repor"),
+        _linhas_da_loja,
+        "Nenhum produto abaixo do estoque mínimo.",
+    )
+
+    # A sobra so entra no documento quando existe: um bloco "nenhum produto
+    # acima do maximo" todo dia vira ruido e a pessoa para de ler o PDF.
+    if excedidos:
+        corpo += f"""
+        <section class="resumo">
+          <span class="resumo-value">{len(excedidos)}</span>
+          <span class="resumo-label">
+            {"produtos acima do máximo" if len(excedidos) != 1 else "produto acima do máximo"}
+          </span>
+        </section>
+        """ + _secoes(
+            excedidos,
+            ("Produto", "Em estoque", "Máximo", "Sobra"),
+            _linhas_excedidas,
+            "",
+        )
     agora = timezone.localtime(timezone.now())
     total = len(estoques)
 
@@ -146,12 +193,20 @@ def _html(estoques, titulo: str, subtitulo: str) -> str:
     """
 
 
-def gerar_estoque_baixo_pdf(estoques, *, titulo: str, subtitulo: str) -> bytes:
-    """Monta o PDF da lista de estoque baixo, agrupada por loja.
+def gerar_estoque_baixo_pdf(
+    estoques, *, titulo: str, subtitulo: str, excedidos=()
+) -> bytes:
+    """Monta o PDF de estoque, agrupado por loja.
 
     Serve tanto para o PDF de uma loja quanto para o combinado do gerente —
     o que muda e so a lista de estoques recebida.
+
+    `excedidos` acrescenta o bloco de quem passou do teto. Vai no MESMO
+    documento, e nao num anexo separado, porque falta e sobra sao a mesma
+    conversa: quem le decide o pedido do dia olhando as duas.
     """
     from weasyprint import HTML
 
-    return HTML(string=_html(list(estoques), titulo, subtitulo)).write_pdf()
+    return HTML(
+        string=_html(list(estoques), titulo, subtitulo, excedidos)
+    ).write_pdf()

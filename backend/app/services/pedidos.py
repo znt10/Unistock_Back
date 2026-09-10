@@ -48,6 +48,13 @@ def somar_itens_no_estoque(pedido):
             defaults={
                 'quantidade_atual': 0,
                 'quantidade_minima': item.produto.estoque_minimo_sugerido,
+                # A linha nasce com o teto sugerido do produto; quem sabe o
+                # giro da loja ajusta depois na tela da loja. Nunca fica nula:
+                # o banco exige maximo > minimo.
+                'quantidade_maxima': max(
+                    item.produto.estoque_maximo_sugerido,
+                    item.produto.estoque_minimo_sugerido + 1,
+                ),
             }
         )
         estoque.quantidade_atual += item.quantidade

@@ -21,6 +21,7 @@ from app import notifications
 from app.api.v1.views import get_user_group_name as papel_do_viewsets
 from app.api.v1.views import is_gerente_ou_admin as regra_do_viewsets
 from app.models import Categoria, Estoque, Loja, Produto
+from app.tests.fabricas import criar_conta, vincular
 from app.permissions import (
     IsGerenteOrAdministrador,
     IsGerenteOrAdministradorOrResponsavel,
@@ -35,10 +36,13 @@ def criar_grupos():
         Group.objects.get_or_create(name=nome)
 
 
-def usuario(username, grupo=None):
+def usuario(username, grupo=None, conta=None):
+    """`conta=None` cria alguem sem empresa — Admin (ve tudo) ou orfao (nada)."""
     user = User.objects.create_user(username=username, password="123456")
     if grupo:
         user.groups.add(Group.objects.get(name=grupo))
+    if conta:
+        vincular(user, conta)
     return user
 
 
@@ -156,10 +160,13 @@ class PermissaoResponsavelTests(TestCase):
         criar_grupos()
         self.classe = IsGerenteOrAdministradorOrResponsavel()
 
-        self.gerente = usuario("ger@email.com", "Gerente")
-        self.outro_gerente = usuario("outroger@email.com", "Gerente")
-        self.responsavel = usuario("resp@email.com", "Responsavel")
-        self.outro = usuario("outro@email.com", "Responsavel")
+        self.conta = criar_conta("Empresa A")
+        self.conta_alheia = criar_conta("Empresa B")
+
+        self.gerente = usuario("ger@email.com", "Gerente", self.conta)
+        self.outro_gerente = usuario("outroger@email.com", "Gerente", self.conta_alheia)
+        self.responsavel = usuario("resp@email.com", "Responsavel", self.conta)
+        self.outro = usuario("outro@email.com", "Responsavel", self.conta_alheia)
         self.sem_grupo = usuario("nada@email.com")
 
         self.loja_dele = Loja.objects.create(
@@ -167,30 +174,40 @@ class PermissaoResponsavelTests(TestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
-            gerente=self.gerente,
+            conta=self.conta,
         )
         self.loja_alheia = Loja.objects.create(
             nome_loja="Loja Sul",
             cidade="Patos",
             endereco="Rua B, 2",
             responsavel=self.outro,
-            gerente=self.outro_gerente,
+            conta=self.conta_alheia,
         )
 
-        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        categoria = Categoria.objects.create(
+            nome="Salgados grande", conta=self.conta
+        )
         produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             categoria=categoria,
+            conta=self.conta,
+        )
+        categoria_alheia = Categoria.objects.create(
+            nome="Salgados grande", conta=self.conta_alheia
+        )
+        produto_alheio = Produto.objects.create(
+            nome_produto="Coxinha",
+            unidade_medida=Produto.UnidadeMedida.CAIXA,
+            categoria=categoria_alheia,
+            conta=self.conta_alheia,
         )
         self.estoque_dele = Estoque.objects.create(
             loja=self.loja_dele, produto=produto,
-            quantidade_atual=5, quantidade_minima=2,
-        )
+            quantidade_atual=5, quantidade_minima=2, quantidade_maxima=999,)
         self.estoque_alheio = Estoque.objects.create(
-            loja=self.loja_alheia, produto=produto,
-            quantidade_atual=5, quantidade_minima=2,
-        )
+            loja=self.loja_alheia, produto=produto_alheio,
+            quantidade_atual=5, quantidade_minima=2, quantidade_maxima=999,)
 
     # --- has_permission: quem entra na rota ---
 
@@ -276,7 +293,9 @@ class PermissaoResponsavelTests(TestCase):
             )
         )
 
-    def test_gerente_sem_loja_nenhuma_atribuida_nao_escreve_em_nenhuma(self):
+    def test_gerente_sem_empresa_nao_escreve_em_nenhuma_loja(self):
+        """Gerente sem perfil nao ve nada — o outro sentido do None em
+        get_conta_do_usuario (o primeiro e o Admin, que ve tudo)."""
         gerente_orfao = usuario("orfao@email.com", "Gerente")
         self.assertFalse(
             self.classe.has_object_permission(

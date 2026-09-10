@@ -10,6 +10,7 @@ from app.models import ItemPedido, Pedido
 from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
     is_admin,
+    escopar_por_conta,
     is_gerente,
 )
 from app.services.pedidos import TransicaoInvalida, mudar_status
@@ -32,13 +33,13 @@ class ItemPedidoViewSet(ResponsavelOuAdminMixin,viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        if is_admin(user):
-            return ItemPedido.objects.all()
-        if is_gerente(user):
-            return ItemPedido.objects.filter(pedido__loja__gerente=user)
+        if not is_admin(user) and not is_gerente(user):
+            # Mesma regra de tenancy do PedidoViewSet: escopo pela loja do usuario
+            return ItemPedido.objects.filter(pedido__loja__responsavel=user)
 
-        # Mesma regra de tenancy do PedidoViewSet: escopo pela loja do usuario
-        return ItemPedido.objects.filter(pedido__loja__responsavel=user)
+        return escopar_por_conta(
+            ItemPedido.objects.all(), user, campo="pedido__loja__conta"
+        )
 
 
 
@@ -60,12 +61,10 @@ class PedidoViewSet( viewsets.ModelViewSet):
         user = self.request.user
         queryset = Pedido.objects.all().order_by('-data_pedido')
 
-        if is_admin(user):
-            pass
-        elif is_gerente(user):
-            queryset = queryset.filter(loja__gerente=user)
-        else:
+        if not is_admin(user) and not is_gerente(user):
             queryset = queryset.filter(loja__in=user.loja_set.all())
+        else:
+            queryset = escopar_por_conta(queryset, user, campo="loja__conta")
 
         status = self.request.query_params.get('status')
         data = self.request.query_params.get('data')

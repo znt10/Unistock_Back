@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group, User
 from rest_framework.test import APITestCase
 
 from app.models import Loja
+from app.tests.fabricas import criar_conta
 
 
 class RegistroNaoRoubaLojaTests(APITestCase):
@@ -15,9 +16,10 @@ class RegistroNaoRoubaLojaTests(APITestCase):
     """
 
     def setUp(self):
+        self.conta = criar_conta("Empresa Alvo")
         self.loja = Loja.objects.create(
             nome_loja='Alvo', cidade='Patos', endereco='Rua 1',
-            email='alvo@unistock.com',
+            email='alvo@unistock.com', conta=self.conta,
         )
         from app.api.v1.serializers.lojas import criar_acesso_da_loja
         self.acesso = criar_acesso_da_loja(self.loja)

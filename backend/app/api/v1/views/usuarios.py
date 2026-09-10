@@ -8,13 +8,18 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from app.models import Loja
+from app.models import Conta, Loja, PerfilUsuario
 from app.notifications.tasks import (
     enviar_email_definir_senha,
     validar_token_confirmacao,
 )
-from app.notifications.tokens import validar_token_senha
-from app.permissions import get_user_group_name, is_admin, is_gerente
+from app.notifications.tokens import ContaInexistente, validar_token_senha
+from app.permissions import (
+    get_conta_do_usuario,
+    get_user_group_name,
+    is_admin,
+    is_gerente,
+)
 from ..serializers import UsuarioSerializer
 from ..throttles import RegistroRateThrottle, SenhaRateThrottle
 
@@ -32,10 +37,18 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return User.objects.all()
 
         if is_gerente(user):
-            lojas_do_gerente = Loja.objects.filter(gerente=user)
+            conta = get_conta_do_usuario(user)
+            if not conta:
+                return User.objects.filter(id=user.id)
+
+            # Os colegas de empresa (o outro gerente inclusive) e os acessos
+            # das lojas dela. Antes so aparecia ele mesmo e os responsaveis
+            # das lojas atribuidas a ele — dois gerentes da mesma empresa nao
+            # se enxergavam.
             return User.objects.filter(
-                Q(id=user.id) | Q(id__in=lojas_do_gerente.values("responsavel_id"))
-            )
+                Q(perfil__conta=conta)
+                | Q(id__in=conta.lojas.values("responsavel_id"))
+            ).distinct()
 
         return User.objects.filter(id=user.id)
 
@@ -108,14 +121,32 @@ class UsuarioViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Gerente sem empresa nao enxerga nada depois da camada de Conta —
+        # criar um assim seria entregar um login inutil e um suporte a mais.
+        # try/except e nao so o filter: um public_id malformado estoura
+        # ValueError no conversor do UUIDField antes de virar consulta, e isso
+        # sairia como 500 no lugar de um 400 explicando o campo.
+        try:
+            conta = Conta.objects.filter(public_id=data.get("conta")).first()
+        except (ValidationError, ValueError, TypeError):
+            conta = None
+
+        if not conta:
+            return Response(
+                {"conta": "Informe a empresa (conta) a que este gerente pertence."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
             user = serializer.save()
 
             from django.contrib.auth.models import Group
             user.groups.add(Group.objects.get(name='Gerente'))
+            PerfilUsuario.objects.create(user=user, conta=conta)
 
             corpo = dict(serializer.data)
+            corpo['conta'] = str(conta.public_id)
             corpo['detail'] = 'Conta criada.'
             return Response(corpo, status=status.HTTP_201_CREATED)
 
@@ -123,10 +154,14 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='estrutura')
     def estrutura(self, request):
-        """GET /api/v1/user/estrutura/ — arvore Gerente -> Lojas, so Admin.
+        """GET /api/v1/user/estrutura/ — arvore Conta -> {membros, lojas}, so Admin.
 
         Existe para o dashboard nao montar essa arvore com N chamadas
-        soltas (uma por gerente) no front.
+        soltas no front.
+
+        Era Gerente -> Lojas. Com a empresa no meio, uma conta com dois
+        gerentes aparecia duas vezes na tela, cada uma com um pedaco das
+        lojas — e as lojas sem gerente nao apareciam em lugar nenhum.
         """
         if not is_admin(request.user):
             return Response(
@@ -134,18 +169,27 @@ class UsuarioViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        gerentes = (
-            User.objects.filter(groups__name="Gerente")
-            .distinct()
-            .prefetch_related("lojas_gerenciadas__responsavel")
-            .order_by("first_name", "email")
-        )
+        contas = Conta.objects.prefetch_related(
+            "membros__user", "lojas__responsavel"
+        ).order_by("nome")
 
         data = [
             {
-                "id": gerente.id,
-                "nome": gerente.first_name or gerente.email or gerente.username,
-                "email": gerente.email,
+                "id": str(conta.public_id),
+                "nome": conta.nome,
+                "ativo": conta.ativo,
+                "membros": [
+                    {
+                        "id": membro.user_id,
+                        "nome": (
+                            membro.user.first_name
+                            or membro.user.email
+                            or membro.user.username
+                        ),
+                        "email": membro.user.email,
+                    }
+                    for membro in conta.membros.all()
+                ],
                 "lojas": [
                     {
                         "id": str(loja.public_id),
@@ -159,10 +203,10 @@ class UsuarioViewSet(viewsets.ModelViewSet):
                             else None
                         ),
                     }
-                    for loja in gerente.lojas_gerenciadas.all()
+                    for loja in conta.lojas.all()
                 ],
             }
-            for gerente in gerentes
+            for conta in contas
         ]
 
         return Response(data)
@@ -214,6 +258,19 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         except signing.SignatureExpired:
             return Response(
                 {"error": "Link expirado. Peca um novo em 'Esqueci a senha'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ContaInexistente:
+            # Nao e o mesmo problema que "ja utilizado", e nao tem a mesma
+            # saida: nao adianta pedir "esqueci a senha" para uma conta que
+            # nao existe. O acesso da loja volta quando o gerente salva o
+            # cadastro dela (ver serializers/lojas.py).
+            return Response(
+                {"error": (
+                    "Esta conta nao existe mais. Peca ao gerente para abrir a "
+                    "loja em Editar e salvar: o acesso e recriado e um novo "
+                    "link chega por email."
+                )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except signing.BadSignature:

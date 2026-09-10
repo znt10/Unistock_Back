@@ -31,18 +31,32 @@ def gerar_token_senha(usuario):
     )
 
 
+class ContaInexistente(Exception):
+    """A assinatura confere, mas o usuario do token nao existe mais.
+
+    Separado de BadSignature porque as duas situacoes pedem coisas OPOSTAS de
+    quem recebeu o link: token usado pede "esqueci a senha"; conta apagada
+    pede recadastro. Tratar as duas com a mesma mensagem manda a pessoa
+    procurar o problema no lugar errado.
+    """
+
+
 def validar_token_senha(token):
     """Devolve o user_id do token.
 
-    Levanta signing.SignatureExpired se passou da validade, ou
-    signing.BadSignature se foi adulterado ou ja foi usado.
+    Levanta signing.SignatureExpired se passou da validade, ContaInexistente
+    se o usuario foi apagado, ou signing.BadSignature se foi adulterado ou ja
+    foi usado.
     """
     from django.contrib.auth.models import User
 
     dados = signing.loads(token, salt=SALT_SENHA, max_age=VALIDADE_TOKEN_SEGUNDOS)
 
     usuario = User.objects.filter(id=dados["user_id"]).first()
-    if not usuario or _marca_da_senha(usuario) != dados.get("marca"):
-        raise signing.BadSignature("Token ja utilizado ou usuario inexistente.")
+    if not usuario:
+        raise ContaInexistente(dados["user_id"])
+
+    if _marca_da_senha(usuario) != dados.get("marca"):
+        raise signing.BadSignature("Token ja utilizado.")
 
     return usuario.id

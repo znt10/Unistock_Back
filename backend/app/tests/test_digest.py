@@ -5,28 +5,31 @@ from django.core import mail
 from rest_framework.test import APITestCase
 
 from app.models import Categoria, Estoque, Loja, Produto
+from app.tests.fabricas import criar_conta, vincular
 from app.notifications.tasks import enviar_digest_lojas
 
 
 class DigestPorLojaTests(APITestCase):
     def setUp(self):
-        cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
-        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
+        self.conta = criar_conta()
+        cat_salgados = Categoria.objects.create(nome='Salgados grande', conta=self.conta)
+        cat_mercado = Categoria.objects.create(nome='Mercado', conta=self.conta)
         self.coxinha = Produto.objects.create(
             nome_produto='Coxinha', categoria=cat_salgados,
+            conta=self.conta,
         )
-        self.coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
+        self.coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado, conta=self.conta)
 
     def _loja(self, nome, email=None):
         return Loja.objects.create(
             nome_loja=nome, cidade='Patos', endereco='Rua 1', email=email,
+            conta=self.conta,
         )
 
     def _baixo(self, loja, produto=None):
         return Estoque.objects.create(
             loja=loja, produto=produto or self.coxinha,
-            quantidade_atual=1, quantidade_minima=5,
-        )
+            quantidade_atual=1, quantidade_minima=5, quantidade_maxima=999,)
 
     def _gerente(self, email='ger@email.com'):
         grupo, _ = Group.objects.get_or_create(name='Gerente')
@@ -34,6 +37,7 @@ class DigestPorLojaTests(APITestCase):
             username=email, email=email, password='123',
         )
         gerente.groups.add(grupo)
+        vincular(gerente, self.conta)
         return gerente
 
     def test_cada_loja_recebe_seu_pdf_no_email_da_loja(self):
@@ -98,8 +102,7 @@ class DigestPorLojaTests(APITestCase):
         self._gerente()
         Estoque.objects.create(
             loja=loja, produto=self.coxinha,
-            quantidade_atual=100, quantidade_minima=5,
-        )
+            quantidade_atual=100, quantidade_minima=5, quantidade_maxima=999,)
 
         enviar_digest_lojas()
 

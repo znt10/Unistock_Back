@@ -3,29 +3,38 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from app.models import Categoria, ItemPedido, Loja, Pedido, Produto
+from app.tests.fabricas import criar_conta, criar_gerente
 
 
 class PedidoEscopoGerenteTests(TestCase):
     def setUp(self):
-        for nome in ("Admin", "Gerente", "Responsavel"):
-            Group.objects.get_or_create(name=nome)
+        self.conta = criar_conta("Empresa A")
+        self.conta_alheia = criar_conta("Empresa B")
 
-        self.gerente = User.objects.create_user(username="ger@x.com", password="123456")
-        self.gerente.groups.add(Group.objects.get(name="Gerente"))
-        self.outro_gerente = User.objects.create_user(username="ger2@x.com", password="123456")
-        self.outro_gerente.groups.add(Group.objects.get(name="Gerente"))
+        self.gerente = criar_gerente("ger@x.com", self.conta)
+        self.outro_gerente = criar_gerente("ger2@x.com", self.conta_alheia)
 
         self.loja_dele = Loja.objects.create(
-            nome_loja="Loja A", cidade="Patos", endereco="Rua 1", gerente=self.gerente,
+            nome_loja="Loja A", cidade="Patos", endereco="Rua 1", conta=self.conta,
         )
         self.loja_alheia = Loja.objects.create(
-            nome_loja="Loja B", cidade="Patos", endereco="Rua 2", gerente=self.outro_gerente,
+            nome_loja="Loja B", cidade="Patos", endereco="Rua 2", conta=self.conta_alheia,
         )
-        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        categoria = Categoria.objects.create(nome="Salgados grande", conta=self.conta)
         produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             categoria=categoria,
+            conta=self.conta,
+        )
+        categoria_alheia = Categoria.objects.create(
+            nome="Salgados grande", conta=self.conta_alheia
+        )
+        produto_alheio = Produto.objects.create(
+            nome_produto="Coxinha",
+            unidade_medida=Produto.UnidadeMedida.CAIXA,
+            categoria=categoria_alheia,
+            conta=self.conta_alheia,
         )
 
         pedido_dele = Pedido.objects.create(responsavel=self.gerente, loja=self.loja_dele)
@@ -34,7 +43,7 @@ class PedidoEscopoGerenteTests(TestCase):
         )
         pedido_alheio = Pedido.objects.create(responsavel=self.outro_gerente, loja=self.loja_alheia)
         ItemPedido.objects.create(
-            pedido=pedido_alheio, produto=produto, quantidade=3, responsavel=self.outro_gerente,
+            pedido=pedido_alheio, produto=produto_alheio, quantidade=3, responsavel=self.outro_gerente,
         )
 
     def test_gerente_ve_so_pedidos_das_proprias_lojas(self):

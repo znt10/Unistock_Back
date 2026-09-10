@@ -4,10 +4,16 @@ from django.test import TestCase
 from rest_framework.test import APITestCase
 
 from app.models import Categoria, Estoque, Loja, Notificacao, Produto
+from app.tests.fabricas import criar_conta, vincular
 from app.notifications import notificar_estoque_baixo
 
 
 class NotificacaoEstoqueBaixoTestCase(TestCase):
+    def setUp(self):
+        # Loja e catalogo exigem empresa desde a camada de Conta. Aqui todos os
+        # cenarios sao dentro de uma empresa so: o assunto e a notificacao.
+        self.conta = criar_conta()
+
     def test_notifica_apenas_responsavel_da_loja_com_estoque_baixo(self):
         grupo_responsavel, _ = Group.objects.get_or_create(name='Responsavel')
         responsavel_loja_1 = User.objects.create_user(
@@ -16,37 +22,41 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             password='123456',
         )
         responsavel_loja_1.groups.add(grupo_responsavel)
+        vincular(responsavel_loja_1, self.conta)
         responsavel_loja_2 = User.objects.create_user(
             username='loja2',
             email='loja2@email.com',
             password='123456',
         )
         responsavel_loja_2.groups.add(grupo_responsavel)
+        vincular(responsavel_loja_2, self.conta)
 
         loja_1 = Loja.objects.create(
             nome_loja='Loja 1',
             cidade='Cidade 1',
             endereco='Rua 1',
             responsavel=responsavel_loja_1,
+            conta=self.conta,
         )
         Loja.objects.create(
             nome_loja='Loja 2',
             cidade='Cidade 2',
             endereco='Rua 2',
             responsavel=responsavel_loja_2,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Salgados grande')[0]
+        categoria = Categoria.objects.create(nome='Salgados grande', conta=self.conta)
         produto = Produto.objects.create(
             nome_produto='Coxinha',
             categoria=categoria,
             estoque_minimo_sugerido=5,
+            conta=self.conta,
         )
         estoque = Estoque.objects.create(
             loja=loja_1,
             produto=produto,
             quantidade_atual=3,
-            quantidade_minima=5,
-        )
+            quantidade_minima=5, quantidade_maxima=999,)
 
         notificar_estoque_baixo(estoque)
 
@@ -71,20 +81,22 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             username='ger@email.com', email='ger@email.com', password='123456',
         )
         gerente.groups.add(grupo_gerente)
+        vincular(gerente, self.conta)
         responsavel = User.objects.create_user(
             username='resp2@email.com', email='resp2@email.com', password='123456',
         )
         responsavel.groups.add(grupo_responsavel)
+        vincular(responsavel, self.conta)
 
         loja = Loja.objects.create(
             nome_loja='Loja do Resp', cidade='Patos', endereco='Rua 9',
             responsavel=responsavel,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
-        produto = Produto.objects.create(nome_produto='Guarana', categoria=categoria)
+        categoria = Categoria.objects.create(nome='Mercado', conta=self.conta)
+        produto = Produto.objects.create(nome_produto='Guarana', categoria=categoria, conta=self.conta)
         estoque = Estoque.objects.create(
-            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=3,
-        )
+            loja=loja, produto=produto, quantidade_atual=0, quantidade_minima=3, quantidade_maxima=999,)
 
         # Quem mexeu foi o responsavel, nao o gerente.
         notificar_estoque_baixo(estoque, usuario_editor=responsavel)
@@ -108,12 +120,12 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
         loja = Loja.objects.create(
             nome_loja='Loja Muda', cidade='Patos', endereco='Rua 3',
             responsavel=usuario,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
-        produto = Produto.objects.create(nome_produto='Coxinho', categoria=categoria)
+        categoria = Categoria.objects.create(nome='Mercado', conta=self.conta)
+        produto = Produto.objects.create(nome_produto='Coxinho', categoria=categoria, conta=self.conta)
         estoque = Estoque.objects.create(
-            loja=loja, produto=produto, quantidade_atual=1, quantidade_minima=3,
-        )
+            loja=loja, produto=produto, quantidade_atual=1, quantidade_minima=3, quantidade_maxima=999,)
         notificar_estoque_baixo(estoque)
 
         # Continua baixo, mas mudou de 1 para 2.
@@ -139,18 +151,19 @@ class NotificacaoEstoqueBaixoTestCase(TestCase):
             cidade='Cidade',
             endereco='Rua',
             responsavel=usuario,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Esfihas grande')[0]
+        categoria = Categoria.objects.create(nome='Esfihas grande', conta=self.conta)
         produto = Produto.objects.create(
             nome_produto='Esfiha',
             categoria=categoria,
+            conta=self.conta,
         )
         estoque = Estoque.objects.create(
             loja=loja,
             produto=produto,
             quantidade_atual=1,
-            quantidade_minima=2,
-        )
+            quantidade_minima=2, quantidade_maxima=999,)
 
         notificar_estoque_baixo(estoque)
         Notificacao.objects.update(lida=True)
@@ -173,6 +186,7 @@ class NotificacaoAssincronaTests(APITestCase):
     """
 
     def setUp(self):
+        self.conta = criar_conta()
         Group.objects.get_or_create(name='Responsavel')
         Group.objects.get_or_create(name='Gerente')
 
@@ -201,13 +215,13 @@ class NotificacaoAssincronaTests(APITestCase):
         loja = Loja.objects.create(
             nome_loja='Loja Email', cidade='Patos', endereco='Rua 1',
             responsavel=responsavel,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Mercado')[0]
-        produto = Produto.objects.create(nome_produto='Coca', categoria=categoria)
+        categoria = Categoria.objects.create(nome='Mercado', conta=self.conta)
+        produto = Produto.objects.create(nome_produto='Coca', categoria=categoria, conta=self.conta)
         estoque = Estoque.objects.create(
             loja=loja, produto=produto,
-            quantidade_atual=1, quantidade_minima=5,
-        )
+            quantidade_atual=1, quantidade_minima=5, quantidade_maxima=999,)
 
         notificar_estoque_baixo(estoque)
 
@@ -222,6 +236,7 @@ class NotificacaoAssincronaTests(APITestCase):
 
 class PreferenciaNotificacaoTests(APITestCase):
     def setUp(self):
+        self.conta = criar_conta()
         self.user = User.objects.create_user(
             username='pref@email.com', email='pref@email.com', password='123456',
         )

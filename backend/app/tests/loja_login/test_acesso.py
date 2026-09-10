@@ -4,14 +4,13 @@ from django.contrib.auth.models import Group, User
 from rest_framework.test import APITestCase
 
 from app.models import Loja
+from app.tests.fabricas import criar_conta, criar_gerente
 
 
 class CriarLojaCriaAcessoTests(APITestCase):
     def setUp(self):
-        Group.objects.get_or_create(name='Responsavel')
-        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
-        self.gerente = User.objects.create_user(username='ger', password='123')
-        self.gerente.groups.add(grupo_gerente)
+        self.conta = criar_conta("Empresa da Lapa")
+        self.gerente = criar_gerente('ger', self.conta, senha='123')
         self.client.force_authenticate(self.gerente)
 
     def _payload(self, **extra):
@@ -106,10 +105,8 @@ class CriarLojaCriaAcessoTests(APITestCase):
 
 class TrocarEmailDaLojaTests(APITestCase):
     def setUp(self):
-        Group.objects.get_or_create(name='Responsavel')
-        grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
-        self.gerente = User.objects.create_user(username='ger2', password='123')
-        self.gerente.groups.add(grupo_gerente)
+        self.conta = criar_conta("Empresa da Lapa")
+        self.gerente = criar_gerente('ger2', self.conta, senha='123')
         self.client.force_authenticate(self.gerente)
         self.client.post('/api/v1/lojas/', {
             'nome_loja': 'Lapa', 'cidade': 'Patos', 'endereco': 'Rua 1',
@@ -134,7 +131,7 @@ class TrocarEmailDaLojaTests(APITestCase):
     def test_loja_que_ganha_email_depois_ganha_acesso(self):
         loja_sem = Loja.objects.create(
             nome_loja='Sem Email', cidade='Patos', endereco='Rua 2',
-            gerente=self.gerente,
+            conta=self.conta,
         )
 
         with self.captureOnCommitCallbacks(execute=True):
@@ -168,7 +165,7 @@ class TrocarEmailDaLojaTests(APITestCase):
         """Sem login pra quebrar, continua sendo um estado valido."""
         loja_sem = Loja.objects.create(
             nome_loja='Sem Acesso', cidade='Patos', endereco='Rua 3',
-            gerente=self.gerente,
+            conta=self.conta,
         )
 
         response = self.client.patch(
@@ -190,10 +187,10 @@ class CriarLojaEhAtomicoTests(APITestCase):
     """
 
     def setUp(self):
-        self.gerente = User.objects.create_user(
-            username='chefe@unistock.com', password='Chefe#2026',
+        self.conta = criar_conta("Empresa do Chefe")
+        self.gerente = criar_gerente(
+            'chefe@unistock.com', self.conta, senha='Chefe#2026',
         )
-        self.gerente.groups.add(Group.objects.get_or_create(name='Gerente')[0])
         self.client.force_authenticate(user=self.gerente)
 
     def test_falha_ao_criar_o_acesso_nao_deixa_loja_orfa(self):

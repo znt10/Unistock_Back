@@ -14,6 +14,7 @@ from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from app.models import Categoria, Estoque, ItemPedido, Loja, Pedido, Produto
+from app.tests.fabricas import criar_conta, vincular
 
 TOKEN_BOT = "token-de-teste"
 CABECALHO_BOT = {"HTTP_X_BOT_TOKEN": TOKEN_BOT}
@@ -23,6 +24,7 @@ TELEFONE_LOJA = "5583999998888"
 @override_settings(BOT_SERVICE_TOKEN=TOKEN_BOT)
 class TransicaoDeStatusTests(APITestCase):
     def setUp(self):
+        self.conta = criar_conta()
         Group.objects.get_or_create(name="Responsavel")
         grupo_gerente, _ = Group.objects.get_or_create(name="Gerente")
 
@@ -30,6 +32,7 @@ class TransicaoDeStatusTests(APITestCase):
             username="ger@email.com", password="123456"
         )
         self.gerente.groups.add(grupo_gerente)
+        vincular(self.gerente, self.conta)
 
         self.responsavel = User.objects.create_user(
             username="loja@email.com", password="123456"
@@ -39,14 +42,15 @@ class TransicaoDeStatusTests(APITestCase):
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
-            gerente=self.gerente,
+            conta=self.conta,
             telefone_whatsapp=TELEFONE_LOJA,
         )
-        categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        categoria = Categoria.objects.create(nome="Salgados grande", conta=self.conta)
         self.produto = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             categoria=categoria,
+            conta=self.conta,
         )
 
     def criar_pedido(self, status=Pedido.Status.PENDENTE, quantidade=3):

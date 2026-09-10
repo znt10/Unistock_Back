@@ -2,6 +2,7 @@ from django.contrib.auth.models import Group, User
 from django.db import IntegrityError, transaction
 from rest_framework.test import APITestCase
 
+from app.tests.fabricas import criar_conta, vincular
 from app.models import (
     Categoria, Estoque, ItemPedido, Loja, MovimentacaoEstoque, Pedido, Produto,
 )
@@ -11,39 +12,39 @@ class EstoqueBaixosTests(APITestCase):
     """Painel de estoque baixo: /estoque/baixos/ (gerente ve as proprias lojas)."""
 
     def setUp(self):
+        self.conta = criar_conta()
         grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
         self.gerente = User.objects.create_user(username='ger', password='123')
         self.gerente.groups.add(grupo_gerente)
+        vincular(self.gerente, self.conta)
         self.resp_a = User.objects.create_user(username='respa', password='123')
 
         self.loja_a = Loja.objects.create(
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
-            responsavel=self.resp_a, gerente=self.gerente,
+            responsavel=self.resp_a, conta=self.conta,
         )
         self.loja_b = Loja.objects.create(
             nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
-            gerente=self.gerente,
+            conta=self.conta,
         )
-        cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
-        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
+        cat_salgados = Categoria.objects.create(nome='Salgados grande', conta=self.conta)
+        cat_mercado = Categoria.objects.create(nome='Mercado', conta=self.conta)
         coxinha = Produto.objects.create(
             nome_produto='Coxinha', categoria=cat_salgados,
+            conta=self.conta,
         )
-        coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
+        coca = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado, conta=self.conta)
 
         # Baixo na loja A, baixo na loja B, e um em dia na loja A.
         Estoque.objects.create(
             loja=self.loja_a, produto=coxinha,
-            quantidade_atual=1, quantidade_minima=5,
-        )
+            quantidade_atual=1, quantidade_minima=5, quantidade_maxima=999,)
         Estoque.objects.create(
             loja=self.loja_b, produto=coxinha,
-            quantidade_atual=0, quantidade_minima=3,
-        )
+            quantidade_atual=0, quantidade_minima=3, quantidade_maxima=999,)
         Estoque.objects.create(
             loja=self.loja_a, produto=coca,
-            quantidade_atual=50, quantidade_minima=5,
-        )
+            quantidade_atual=50, quantidade_minima=5, quantidade_maxima=999,)
 
     def test_gerente_ve_baixos_de_todas_as_lojas(self):
         self.client.force_authenticate(self.gerente)
@@ -78,39 +79,39 @@ class EstoqueIntegridadeTests(APITestCase):
     """Constraints do Estoque e historico de MovimentacaoEstoque."""
 
     def setUp(self):
+        self.conta = criar_conta()
         self.grupo_gerente, _ = Group.objects.get_or_create(name='Gerente')
         self.user = User.objects.create_user(username='resp', password='123')
         self.gerente = User.objects.create_user(username='ger', password='123')
         self.gerente.groups.add(self.grupo_gerente)
+        vincular(self.gerente, self.conta)
 
         self.loja = Loja.objects.create(
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
-            responsavel=self.user, gerente=self.gerente,
+            responsavel=self.user, conta=self.conta,
         )
-        self.cat_salgados = Categoria.objects.get_or_create(nome='Salgados grande')[0]
+        self.cat_salgados = Categoria.objects.create(nome='Salgados grande', conta=self.conta)
         self.produto = Produto.objects.create(
             nome_produto='Coxinha', categoria=self.cat_salgados,
+            conta=self.conta,
         )
         self.estoque = Estoque.objects.create(
             loja=self.loja, produto=self.produto,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
 
     def test_nao_permite_estoque_duplicado_para_produto_e_loja(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Estoque.objects.create(
                 loja=self.loja, produto=self.produto,
-                quantidade_atual=5, quantidade_minima=1,
-            )
+                quantidade_atual=5, quantidade_minima=1, quantidade_maxima=999,)
 
     def test_nao_permite_estoque_negativo(self):
-        cat_mercado = Categoria.objects.get_or_create(nome='Mercado')[0]
-        outro = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado)
+        cat_mercado = Categoria.objects.create(nome='Mercado', conta=self.conta)
+        outro = Produto.objects.create(nome_produto='Coca', categoria=cat_mercado, conta=self.conta)
         with self.assertRaises(IntegrityError), transaction.atomic():
             Estoque.objects.create(
                 loja=self.loja, produto=outro,
-                quantidade_atual=-1, quantidade_minima=0,
-            )
+                quantidade_atual=-1, quantidade_minima=0, quantidade_maxima=999,)
 
     def test_entrega_de_pedido_registra_movimentacao_entrada(self):
         from app.services.pedidos import somar_itens_no_estoque

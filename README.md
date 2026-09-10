@@ -97,25 +97,75 @@ Pontos que costumam pegar:
 - **Email** — com `DEBUG=True` os emails saem no console do worker. Nao precisa
   de SMTP para desenvolver.
 
-## Perfis de acesso
+## Empresa (Conta) e perfis de acesso
 
-Todo usuario precisa estar em um grupo. Sem grupo, o login e recusado.
+O limite de visibilidade do sistema e a **`Conta`** — a empresa. Loja,
+Categoria e Produto pertencem a uma conta, e o usuario entra nela pelo
+`PerfilUsuario` (um usuario, uma conta). Quem esta na mesma conta ve as mesmas
+lojas e o mesmo catalogo: **dois gerentes numa empresa trabalham juntos**, que
+e o caso que o modelo anterior nao sabia representar — ali o dono do dado era
+a PESSOA (`Loja.gerente`), entao cada gerente era um silo e a loja perdia o
+catalogo se o gerente dela saisse.
+
+O papel continua sendo o grupo do Django, agora so como cargo:
 
 | Grupo | Alcance |
 |---|---|
-| `Admin` | tudo, mais o Django Admin |
-| `Gerente` | so as proprias lojas/produtos/categorias (`Loja.gerente`) |
-| `Responsavel` | apenas a propria loja, catalogo do gerente dela |
+| `Admin` | todas as contas, mais o Django Admin |
+| `Gerente` | a propria empresa: lojas, produtos e categorias dela |
+| `Responsavel` | a propria loja, com o catalogo da empresa dela |
 
-O escopo e aplicado no `queryset` de cada ViewSet, nao so na tela. Um usuario
-que chame a API direto continua vendo so o que e dele.
+Todo usuario precisa estar em um grupo. Sem grupo, o login e recusado.
 
-Cada Gerente tem o proprio catalogo — `Produto` e `Categoria` tambem tem FK
-`gerente`, definida na criacao e imutavel depois (mesmo padrao de
-`Loja.gerente`). Um Responsavel ve o catalogo do gerente da propria loja; sem
-loja/gerente atribuido, nao ve nenhum. Isso vale tambem no bot de WhatsApp:
-`/bot/catalogo/` e `/bot/pedido/` so enxergam o produto da mesma empresa da
-loja que perguntou.
+O escopo sai de uma pergunta so, `get_conta_do_usuario` em `permissions.py`, e
+e aplicado no `queryset` de cada ViewSet e tambem no `/admin`. Um usuario que
+chame a API direto continua vendo so o que e da empresa dele. `None` ali tem
+dois sentidos opostos, e quem chama precisa saber a diferenca: Admin nao tem
+conta e ve TUDO; usuario sem perfil nao ve NADA.
+
+A conta nunca vem do corpo do request — e sempre derivada de quem esta logado.
+Mandar `conta` num POST de loja ou categoria simplesmente nao tem efeito. O
+Admin, que nao pertence a nenhuma empresa, e o unico que precisa informar em
+qual esta cadastrando.
+
+Isso vale tambem no bot de WhatsApp: `/bot/catalogo/`, `/bot/pedido/` e o PDF
+de `/bot/relatorio/` so enxergam a empresa da loja que perguntou.
+
+Contas e vinculos sao criados pelo Admin no `/admin` — nao ha autoatendimento.
+A tela da Conta traz os membros num inline, que e onde se poe o segundo
+gerente numa empresa.
+
+### Niveis de estoque por loja
+
+Cada linha de `Estoque` e um par (produto, loja) e carrega os DOIS niveis:
+
+| Campo | O que faz |
+|---|---|
+| `quantidade_minima` | abaixo/igual a ele, alerta de **falta** |
+| `quantidade_maxima` | acima dele, alerta de **sobra** |
+
+Os dois sao por LOJA, nao por produto: a Lapa gira muito mais que a Casa Verde
+e precisa de niveis maiores; ao mesmo tempo nao pode acumular, porque estraga.
+O que o produto guarda (`estoque_minimo_sugerido`, `estoque_maximo_sugerido`) e
+so o valor de PARTIDA de uma linha nova, nunca um teto universal.
+
+O maximo e obrigatorio e sempre maior que o minimo. A regra esta no serializer
+(400 explicando o campo) e tambem em `CheckConstraint` no banco, porque o bot,
+o PDV e o `/admin` escrevem estoque sem passar pela API.
+
+**Pedido que estoura o teto avisa, nao bloqueia.** A primeira tentativa volta
+`409` com a lista do que passaria (`produto`, `resultante`, `maximo`, `cabe`);
+reenviar com `confirmar_excesso: true` registra assim mesmo. Trava dura
+empurraria quem esta na loja a subir o teto para 200 so para conseguir pedir —
+e nunca mais abaixar, matando junto o alerta que protege o produto.
+
+Produto que a loja ainda nao estocou nao dispara o aviso: sem linha nao existe
+teto DAQUELA loja, e avisar em cima do palpite do catalogo seria o
+comportamento universal que este campo veio eliminar. A primeira entrega cria a
+linha, e dali em diante o excesso alerta normalmente.
+
+Os niveis se editam na tela da loja (`/lojas/editar/<id>`), com falta e sobra
+lado a lado — e assim que da para comparar duas lojas de relance.
 
 ### Limites de taxa
 
@@ -172,8 +222,9 @@ POST  /api/v1/user/definir-senha/<token>/    define a senha nova
 GET /gerar_pdf/?periodo=dia|semana|mes&data=AAAA-MM-DD
 ```
 
-Relatorio de pedidos de todas as lojas. Restrito a gerente/admin — o relatorio
-e global, e um responsavel nao deve enxergar os pedidos das outras unidades.
+Relatorio de pedidos das lojas da empresa. Restrito a gerente/admin — um
+responsavel nao deve enxergar os pedidos das outras unidades. O Admin, que nao
+pertence a nenhuma empresa, recebe o relatorio global.
 
 ### Bot de WhatsApp
 

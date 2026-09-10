@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from app.models import Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
-from app.notifications import notificar_estoque_baixo
+from app.notifications import notificar_estoque_baixo, notificar_estoque_excedido
 
 
 class EstoqueSerializer(serializers.ModelSerializer):
@@ -20,6 +20,7 @@ class EstoqueSerializer(serializers.ModelSerializer):
             "loja",
             "quantidade_atual",
             "quantidade_minima",
+            "quantidade_maxima",
             "estado",
             "atualizado_em",
         ]
@@ -46,6 +47,7 @@ class EstoqueBaixoSerializer(serializers.ModelSerializer):
             "unidade_medida",
             "quantidade_atual",
             "quantidade_minima",
+            "quantidade_maxima",
         ]
 
 
@@ -61,6 +63,37 @@ class EstoqueWriteSerializer(EstoqueSerializer):
         queryset=Loja.objects.all(),
     )
 
+    def validate(self, data):
+        """Teto sempre acima do minimo.
+
+        O banco tambem garante isto (CheckConstraint), mas so a partir daqui
+        sai um 400 explicando o campo em vez de um 500 do driver. As duas
+        pontas existem de proposito: o bot e o /admin nao passam por aqui.
+        """
+        minima = data.get(
+            "quantidade_minima", getattr(self.instance, "quantidade_minima", 0)
+        )
+        maxima = data.get(
+            "quantidade_maxima", getattr(self.instance, "quantidade_maxima", None)
+        )
+
+        if maxima is None:
+            raise serializers.ValidationError(
+                {"quantidade_maxima": "Informe o maximo deste produto nesta loja."}
+            )
+
+        if maxima <= minima:
+            raise serializers.ValidationError(
+                {
+                    "quantidade_maxima": (
+                        f"O maximo ({maxima}) precisa ser maior que o minimo "
+                        f"({minima})."
+                    )
+                }
+            )
+
+        return super().validate(data)
+
 
 class EstoqueCreateSerializer(EstoqueWriteSerializer):
     """Serializer para criacao de estoque."""
@@ -68,10 +101,9 @@ class EstoqueCreateSerializer(EstoqueWriteSerializer):
     def create(self, validated_data):
         estoque = super().create(validated_data)
         request = self.context.get("request")
-        notificar_estoque_baixo(
-            estoque,
-            usuario_editor=getattr(request, "user", None),
-        )
+        editor = getattr(request, "user", None)
+        notificar_estoque_baixo(estoque, usuario_editor=editor)
+        notificar_estoque_excedido(estoque, usuario_editor=editor)
         return estoque
 
 
@@ -93,6 +125,8 @@ class EstoqueUpdateSerializer(EstoqueWriteSerializer):
                 usuario=getattr(request, "user", None),
             )
 
+        editor = getattr(request, "user", None)
+
         if estoque.quantidade_minima > 0 and estoque.quantidade_atual > estoque.quantidade_minima:
             # Fim do episodio de estoque baixo: apaga lidas e nao lidas, para
             # que uma proxima queda gere notificacao nova (dedup por episodio).
@@ -101,9 +135,10 @@ class EstoqueUpdateSerializer(EstoqueWriteSerializer):
                 estoque=estoque,
             ).delete()
         else:
-            notificar_estoque_baixo(
-                estoque,
-                usuario_editor=getattr(request, "user", None),
-            )
+            notificar_estoque_baixo(estoque, usuario_editor=editor)
+
+        # O excesso cuida do proprio ciclo (cria e apaga) dentro da funcao,
+        # entao nao precisa do if/else acima.
+        notificar_estoque_excedido(estoque, usuario_editor=editor)
 
         return estoque

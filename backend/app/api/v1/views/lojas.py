@@ -8,10 +8,10 @@ from app.models import Loja
 from app.permissions import (
     IsGerenteOrAdministrador,
     IsGerenteOrAdministradorOrResponsavel,
-    is_admin,
-    is_gerente,
+    escopar_por_conta,
 )
 from ..serializers import LojaSerializer
+from .conta import conta_do_request
 
 
 # 🔹 LOJA
@@ -21,16 +21,13 @@ class LojaViewSet(viewsets.ModelViewSet):
     lookup_field = 'public_id'
 
     def get_queryset(self):
-        user = self.request.user
-        queryset = Loja.objects.all().order_by('id')
-
-        if is_gerente(user) and not is_admin(user):
-            return queryset.filter(gerente=user)
-
-        # Admin e Responsavel mantem o comportamento atual (sem filtro aqui —
-        # Responsavel e limitado por has_object_permission na escrita e pelo
-        # front so mostrar a loja dele).
-        return queryset
+        # Uma regra so para os tres papeis. Antes da camada de Conta, o
+        # Responsavel recebia a lista inteira e o isolamento dependia do front
+        # nao mostrar as outras lojas — agora ele ve as da conta dele, como
+        # todo mundo.
+        return escopar_por_conta(
+            Loja.objects.all().order_by('id'), self.request.user
+        )
 
     def get_permissions(self):
         if self.action == 'list':
@@ -43,25 +40,11 @@ class LojaViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), IsGerenteOrAdministradorOrResponsavel()]
 
     def perform_create(self, serializer):
-        user = self.request.user
-        if "gerente" in self.request.data and not is_admin(user):
-            raise PermissionDenied("Apenas admin pode definir o gerente da loja.")
-
-        if is_gerente(user) and not is_admin(user) and "gerente" not in self.request.data:
-            # Gerente que cria a loja vira o dono dela por padrao — sem isso
-            # ele perderia acesso de escrita a propria loja logo em seguida.
-            # O gerente da loja nao pode mais ser trocado depois (perform_update).
-            serializer.save(gerente=user)
-            return
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        if "gerente" in self.request.data:
-            raise PermissionDenied(
-                "O gerente da loja e definido na criacao e nao pode ser alterado."
-            )
-        serializer.save()
+        # A conta NUNCA vem do corpo do request: e sempre a de quem esta
+        # logado. Isso apaga o par de guardas que existia aqui ("so admin
+        # define o gerente" / "o gerente nao muda depois") e, junto com elas,
+        # a chance de alguem criar loja na empresa de outro.
+        serializer.save(conta=conta_do_request(self.request))
 
     def destroy(self, request, *args, **kwargs):
         # MovimentacaoEstoque protege a loja (on_delete=PROTECT) pra nao perder

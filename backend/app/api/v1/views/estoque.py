@@ -12,13 +12,19 @@ from app.permissions import (
     get_conta_do_usuario,
     is_admin,
     is_gerente,
+    is_gerente_ou_admin,
 )
+from app.services.fabrica import segue_fluxo_fabrica
 from ..serializers import (
     EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
     EstoqueSerializer,
     EstoqueUpdateSerializer,
     MovimentacaoEstoqueSerializer,
+)
+
+MENSAGEM_ESTOQUE_DA_FABRICA = (
+    "Esse produto é da fábrica: o estoque dele muda lendo as etiquetas das caixas."
 )
 
 
@@ -86,16 +92,41 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         if not loja or loja.responsavel_id != user.id:
             raise PermissionDenied("Voce so pode editar o estoque da sua loja.")
 
+    def _validar_quantidade_de_produto_da_fabrica(self, user, produto, nova, anterior):
+        """Responsavel nao mexe na QUANTIDADE de produto que segue as caixas.
+
+        So a quantidade: minimo, maximo e estado nao desencontram o numero de
+        caixas do estoque. A gerencia continua podendo corrigir.
+        """
+        if is_gerente_ou_admin(user):
+            return
+        if nova is None or nova == anterior:
+            return
+        if segue_fluxo_fabrica(produto):
+            raise PermissionDenied(MENSAGEM_ESTOQUE_DA_FABRICA)
+
     def perform_create(self, serializer):
         self._validar_loja_do_responsavel(
             self.request.user,
             serializer.validated_data.get('loja')
+        )
+        self._validar_quantidade_de_produto_da_fabrica(
+            self.request.user,
+            serializer.validated_data['produto'],
+            serializer.validated_data.get('quantidade_atual'),
+            0,
         )
         serializer.save()
 
     def perform_update(self, serializer):
         loja = serializer.validated_data.get('loja', serializer.instance.loja)
         self._validar_loja_do_responsavel(self.request.user, loja)
+        self._validar_quantidade_de_produto_da_fabrica(
+            self.request.user,
+            serializer.validated_data.get('produto', serializer.instance.produto),
+            serializer.validated_data.get('quantidade_atual'),
+            serializer.instance.quantidade_atual,
+        )
         serializer.save()
 
     def perform_destroy(self, instance):

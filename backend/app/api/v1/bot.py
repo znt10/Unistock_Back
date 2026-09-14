@@ -34,6 +34,7 @@ from app.models import (
 from app.permissions import get_conta_do_usuario
 from app.notifications import notificar_estoque_baixo
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
+from app.services.fabrica import segue_fluxo_fabrica
 from app.services.pedidos import TransicaoInvalida, mudar_status
 from .serializers import PedidoCreateSerializer
 
@@ -386,6 +387,12 @@ class BotEstoqueRemoverView(BotAPIView):
                 return Response(
                     {"error": f"Produto de codigo {codigo} nao encontrado."},
                     status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if segue_fluxo_fabrica(produto):
+                return Response(
+                    {"error": "Esse produto é da fábrica: dê baixa lendo a etiqueta da caixa."},
+                    status=status.HTTP_409_CONFLICT,
                 )
 
             produtos_por_id[produto.id] = produto

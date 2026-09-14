@@ -8,7 +8,7 @@ usuario que nao enxerga nada, achando que testou a regra) e alta.
 
 from django.contrib.auth.models import Group, User
 
-from app.models import Conta, PerfilUsuario
+from app.models import Categoria, Conta, ItemPedido, Loja, PerfilUsuario, Pedido, Produto
 
 
 def criar_grupos():
@@ -58,3 +58,37 @@ def vincular(user, conta):
     email, first_name, senha especifica) e so precisam do vinculo.
     """
     return PerfilUsuario.objects.create(user=user, conta=conta)
+
+
+def criar_loja(conta, nome="Lapa", **extras):
+    """Loja comum com o proprio acesso (grupo Responsavel), como o cadastro faz."""
+    username = f"{nome.lower().replace(' ', '-')}-{conta.pk}@x.com"
+    acesso = criar_responsavel(username, conta)
+    dados = {"cidade": "Patos", "endereco": "Rua 1", "responsavel": acesso}
+    dados.update(extras)
+    return Loja.objects.create(nome_loja=nome, conta=conta, **dados)
+
+
+def criar_fabrica(conta, nome="Fabrica Central", **extras):
+    return criar_loja(conta, nome, tipo=Loja.Tipo.FABRICA, **extras)
+
+
+def criar_produto(conta, nome="Coxinha", categoria="Salgados grande", vem_da_fabrica=True, **extras):
+    categoria_obj, _ = Categoria.objects.get_or_create(nome=categoria, conta=conta)
+    return Produto.objects.create(
+        nome_produto=nome,
+        unidade_medida=Produto.UnidadeMedida.CAIXA,
+        categoria=categoria_obj,
+        conta=conta,
+        vem_da_fabrica=vem_da_fabrica,
+        **extras,
+    )
+
+
+def criar_pedido(loja, produto, quantidade=3, **extras):
+    """Pedido de um produto so, direto no banco (sem passar pela API)."""
+    pedido = Pedido.objects.create(responsavel=loja.responsavel, loja=loja, **extras)
+    ItemPedido.objects.create(
+        pedido=pedido, produto=produto, quantidade=quantidade, responsavel=loja.responsavel
+    )
+    return pedido

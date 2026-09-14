@@ -82,11 +82,18 @@ class PerfilUsuario(BaseModel):
 
 
 class Loja(BaseModel):
+    class Tipo(models.TextChoices):
+        # Grafia "Loja"/"Fabrica", e nao LOJA/FABRICA: e o que a tela de
+        # cadastro ja envia e o que ja esta gravado. Trocar a grafia obrigaria
+        # migrar front e dados juntos, sem ganho nenhum.
+        LOJA = "Loja", "Loja"
+        FABRICA = "Fabrica", "Fábrica"
+
     # PROTECT e nao CASCADE: apagar uma conta por engano no /admin nao pode
     # levar junto o historico de pedidos e movimentacao das lojas dela.
     conta = models.ForeignKey(Conta, on_delete=models.PROTECT, related_name="lojas")
     nome_loja = models.CharField(max_length=100)
-    tipo = models.CharField(max_length=50, null=True, blank=True)
+    tipo = models.CharField(max_length=50, choices=Tipo.choices, default=Tipo.LOJA)
     cidade = models.CharField(max_length=100)
     endereco = models.CharField(max_length=255)
     ativo = models.BooleanField(default=True)
@@ -153,6 +160,9 @@ class Produto(BaseModel):
     # Nao e um teto universal: o que vale e o de cada loja, porque a Lapa gira
     # muito mais que a Casa Verde e um numero so nao serve para as duas.
     estoque_maximo_sugerido = models.PositiveIntegerField(default=3)
+    # Sai da fabrica propria em caixas com etiqueta. Sozinho nao liga o fluxo
+    # das caixas: ver services/fabrica.segue_fluxo_fabrica.
+    vem_da_fabrica = models.BooleanField(default=False)
     categoria = models.ForeignKey(
         Categoria,
         on_delete=models.PROTECT,
@@ -172,6 +182,7 @@ class Pedido(BaseModel):
     
     class Status(models.TextChoices):
         PENDENTE = "PENDENTE", "Pendente"
+        EM_ENTREGA = "EM_ENTREGA", "Em entrega"
         ENTREGUE = "ENTREGUE", "Entregue"
         CANCELADO = "CANCELADO", "Cancelado"
 
@@ -189,6 +200,9 @@ class Pedido(BaseModel):
         default=Status.PENDENTE
     )
     descricao = models.TextField(blank=True, null=True)
+    # Gravado na criacao, e nao lido do produto na hora: mudar vem_da_fabrica
+    # num produto nao pode trocar o fluxo de um pedido que ja esta a caminho.
+    da_fabrica = models.BooleanField(default=False)
     data_pedido = models.DateTimeField(auto_now_add=True)
 
     produtos = models.ManyToManyField(
@@ -208,9 +222,46 @@ class ItemPedido(BaseModel):
     produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
     quantidade = models.IntegerField()
     responsavel = models.ForeignKey(User, on_delete=models.PROTECT)
-    
+
     def __str__(self):
         return f"{self.quantidade} x {self.produto.nome_produto} (Pedido {self.pedido.id})"
+
+
+class Caixa(BaseModel):
+    """Uma caixa fisica que sai da fabrica com etiqueta de QR.
+
+    Produto e loja vem do pedido (que tem um item so) — nao sao repetidos
+    aqui, para nao existirem duas fontes do mesmo fato.
+    """
+
+    class Situacao(models.TextChoices):
+        A_CAMINHO = "A_CAMINHO", "A caminho"
+        CHEGOU = "CHEGOU", "Chegou"
+        ABERTA = "ABERTA", "Aberta"
+        ACABOU = "ACABOU", "Acabou"
+
+    pedido = models.ForeignKey(Pedido, on_delete=models.PROTECT, related_name="caixas")
+    # "caixa 2/3": o 3 e a quantidade do item do pedido.
+    numero = models.PositiveSmallIntegerField()
+    # Vai no QR. Aleatorio, e nao sequencial, para ninguem chegar a caixa de
+    # outra loja adivinhando um numero.
+    codigo = models.CharField(max_length=16, unique=True)
+    situacao = models.CharField(
+        max_length=10, choices=Situacao.choices, default=Situacao.A_CAMINHO
+    )
+    chegou_em = models.DateTimeField(null=True, blank=True)
+    aberta_em = models.DateTimeField(null=True, blank=True)
+    acabou_em = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pedido", "numero"], name="caixa_numero_unico_no_pedido"
+            ),
+        ]
+
+    def __str__(self):
+        return f"Caixa {self.numero} do pedido {self.pedido_id}"
 
 
 class EstoqueQuerySet(models.QuerySet):

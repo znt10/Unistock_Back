@@ -1,7 +1,7 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from app.models import Estoque, Pedido
+from app.models import Estoque, ItemPedido, Pedido
 from app.tests.fabricas import (
     criar_conta,
     criar_fabrica,
@@ -100,3 +100,51 @@ class ImprimirEtiquetasTests(TestCase):
         self.client.force_authenticate(criar_gerente("ger@x.com", self.conta))
         resposta = self.imprimir(self.pedido(1))
         self.assertEqual(len(resposta.data["impressos"]), 1)
+
+    def test_pedido_sem_item_e_recusado_sem_derrubar_o_lote(self):
+        # Pedido sem item nenhum: alcancavel via ItemPedidoViewSet.destroy sem
+        # guarda de "manter pelo menos um item".
+        sem_item = Pedido.objects.create(
+            responsavel=self.lapa.responsavel, loja=self.lapa, da_fabrica=True
+        )
+        valido = self.pedido(2)
+
+        resposta = self.imprimir(sem_item, valido)
+
+        self.assertEqual(
+            resposta.data["recusados"],
+            [{"pedido": str(sem_item.public_id), "numero": sem_item.id,
+              "motivo": "Pedido precisa ter um produto só.", "faltam": None}],
+        )
+        # O ponto do teste: o pedido valido no MESMO lote continua imprimindo.
+        self.assertEqual([p["pedido"] for p in resposta.data["impressos"]], [str(valido.public_id)])
+        valido.refresh_from_db()
+        self.assertEqual(valido.status, Pedido.Status.EM_ENTREGA)
+
+    def test_pedido_com_dois_itens_e_recusado(self):
+        dois_itens = self.pedido(1)
+        outro_produto = criar_produto(self.conta, "Refrigerante", "Bebidas")
+        ItemPedido.objects.create(
+            pedido=dois_itens, produto=outro_produto, quantidade=1,
+            responsavel=self.lapa.responsavel,
+        )
+
+        resposta = self.imprimir(dois_itens)
+
+        self.assertEqual(resposta.data["recusados"][0]["motivo"], "Pedido precisa ter um produto só.")
+        self.assertEqual(resposta.data["impressos"], [])
+
+    def test_faltam_mostra_o_deficit_real_com_disponivel_negativo(self):
+        # Imprime 7 (a_caminho vira 7), depois o gerente baixa o estoque da
+        # fabrica para 5 direto no ORM: disponivel fica negativo (5 - 7 = -2).
+        primeiro = self.pedido(7)
+        self.estoque.quantidade_atual = 12
+        self.estoque.save(update_fields=["quantidade_atual"])
+        self.imprimir(primeiro)
+
+        self.estoque.quantidade_atual = 5
+        self.estoque.save(update_fields=["quantidade_atual"])
+
+        resposta = self.imprimir(self.pedido(2))
+
+        self.assertEqual(resposta.data["recusados"][0]["faltam"], 4)

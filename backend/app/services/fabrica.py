@@ -99,7 +99,7 @@ def caixas_a_caminho(fabrica, produto_ids):
             pedido__itens__produto_id__in=list(produto_ids),
         )
         .values("pedido__itens__produto_id")
-        .annotate(total=Count("id"))
+        .annotate(total=Count("id", distinct=True))
     )
     return {linha["pedido__itens__produto_id"]: linha["total"] for linha in linhas}
 
@@ -201,11 +201,11 @@ def imprimir_etiquetas(fabrica, pedido_ids):
             else:
                 candidatos.append(pedido)
 
-        itens = {
-            item.pedido_id: item
-            for item in ItemPedido.objects.filter(pedido__in=candidatos).select_related("produto")
-        }
-        produto_ids = sorted({item.produto_id for item in itens.values()})
+        itens_por_pedido = {}
+        for item in ItemPedido.objects.filter(pedido__in=candidatos).select_related("produto"):
+            itens_por_pedido.setdefault(item.pedido_id, []).append(item)
+
+        produto_ids = sorted({item.produto_id for itens in itens_por_pedido.values() for item in itens})
         estoques = {
             estoque.produto_id: estoque
             for estoque in Estoque.objects.select_for_update()
@@ -215,12 +215,19 @@ def imprimir_etiquetas(fabrica, pedido_ids):
         a_caminho = caixas_a_caminho(fabrica, produto_ids)
 
         for pedido in candidatos:
-            item = itens[pedido.id]
+            itens_do_pedido = itens_por_pedido.get(pedido.id, [])
+            if len(itens_do_pedido) != 1:
+                resultado.recusados.append(_recusa(
+                    pedido.public_id, pedido.id, "Pedido precisa ter um produto só."
+                ))
+                continue
+
+            item = itens_do_pedido[0]
             estoque = estoques.get(item.produto_id)
             disponivel = (estoque.quantidade_atual if estoque else 0) - a_caminho.get(item.produto_id, 0)
 
             if item.quantidade > disponivel:
-                faltam = item.quantidade - max(disponivel, 0)
+                faltam = item.quantidade - disponivel
                 resultado.recusados.append(_recusa(
                     pedido.public_id,
                     pedido.id,

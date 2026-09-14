@@ -113,7 +113,7 @@ def fabrica_do_usuario(user):
         return None
 
     return Loja.objects.filter(
-        responsavel=user, tipo=Loja.Tipo.FABRICA, ativo=True
+        responsavel=user, tipo=Loja.Tipo.FABRICA, ativo=True, is_deleted=False
     ).first()
 
 

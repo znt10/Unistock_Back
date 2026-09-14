@@ -48,6 +48,14 @@ class QuemEAFabricaTests(TestCase):
         self.assertFalse(is_fabrica(self.lapa.responsavel))
         self.assertFalse(is_fabrica(criar_gerente("g@x.com", self.conta)))
 
+    def test_fabrica_apagada_fica_invisivel_para_as_duas_perguntas(self):
+        # ativo continua True (soft_delete nao mexe nele) — quem barra e o
+        # is_deleted, que as duas funcoes precisam checar igual.
+        self.fabrica.is_deleted = True
+        self.fabrica.save()
+        self.assertIsNone(fabrica_da_conta(self.conta.id))
+        self.assertFalse(is_fabrica(self.fabrica.responsavel))
+
     def test_me_expoe_o_tipo_da_loja(self):
         client = APIClient()
         client.force_authenticate(self.fabrica.responsavel)

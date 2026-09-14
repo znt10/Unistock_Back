@@ -153,6 +153,7 @@ class LoginView(APIView):
                     "loja": {
                         "id": loja_vinculada.public_id,
                         "nome": loja_vinculada.nome_loja,
+                        "tipo": loja_vinculada.tipo,
                     }
                     if loja_vinculada
                     else None,

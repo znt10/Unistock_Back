@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import ProtectedError
 from rest_framework import status, viewsets
 from rest_framework.exceptions import PermissionDenied
@@ -10,6 +11,7 @@ from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
     escopar_por_conta,
 )
+from app.services.fabrica import conferir_fabrica_unica
 from ..serializers import LojaSerializer
 from .conta import conta_do_request
 
@@ -44,7 +46,25 @@ class LojaViewSet(viewsets.ModelViewSet):
         # logado. Isso apaga o par de guardas que existia aqui ("so admin
         # define o gerente" / "o gerente nao muda depois") e, junto com elas,
         # a chance de alguem criar loja na empresa de outro.
-        serializer.save(conta=conta_do_request(self.request))
+        conta = conta_do_request(self.request)
+        dados = serializer.validated_data
+        with transaction.atomic():
+            conferir_fabrica_unica(
+                conta.id, dados.get("tipo", Loja.Tipo.LOJA), dados.get("ativo", True)
+            )
+            serializer.save(conta=conta)
+
+    def perform_update(self, serializer):
+        loja = serializer.instance
+        dados = serializer.validated_data
+        with transaction.atomic():
+            conferir_fabrica_unica(
+                loja.conta_id,
+                dados.get("tipo", loja.tipo),
+                dados.get("ativo", loja.ativo),
+                loja=loja,
+            )
+            serializer.save()
 
     def destroy(self, request, *args, **kwargs):
         # MovimentacaoEstoque protege a loja (on_delete=PROTECT) pra nao perder

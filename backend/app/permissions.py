@@ -103,6 +103,24 @@ def is_responsavel(user):
     return user.groups.filter(name="Responsavel").exists()
 
 
+def fabrica_do_usuario(user):
+    """A loja-fabrica de que este usuario e o acesso, ou None.
+
+    A fabrica usa o mesmo login das lojas (grupo Responsavel); o que a
+    distingue e o tipo da loja que ela responde.
+    """
+    if not user or not user.is_authenticated:
+        return None
+
+    return Loja.objects.filter(
+        responsavel=user, tipo=Loja.Tipo.FABRICA, ativo=True
+    ).first()
+
+
+def is_fabrica(user):
+    return fabrica_do_usuario(user) is not None
+
+
 def get_user_group_name(user):
     """Papel do usuario para a interface: Admin, Gerente, Responsavel ou None.
 

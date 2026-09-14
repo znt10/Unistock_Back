@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .bot import BotCatalogoView, BotContatoView, BotEstoqueRemoverView, BotPedidoConfirmarView, BotPedidoView, BotRelatorioView
 from .whatsapp_webhook import EvolutionWebhookView
 from .views import CategoriaViewSet, EstoqueViewSet, LojaViewSet, MovimentacaoEstoqueViewSet, PedidoViewSet, ItemPedidoViewSet, PreferenciaNotificacaoViewSet, ProdutoViewSet, UsuarioViewSet, NotificacaoViewSet, VendaViewSet
+from .views.fabrica import FabricaDisponivelView, FabricaEtiquetasView, FabricaProducaoView
 
 router = DefaultRouter()
 router.register(r'pedidos', PedidoViewSet)
@@ -25,4 +26,7 @@ urlpatterns = router.urls + [
     path('bot/estoque/remover/', BotEstoqueRemoverView.as_view(), name='bot-estoque-remover'),
     path('bot/relatorio/', BotRelatorioView.as_view(), name='bot-relatorio'),
     path('bot/webhook/<str:token>/', EvolutionWebhookView.as_view(), name='bot-webhook'),
+    path('fabrica/etiquetas/', FabricaEtiquetasView.as_view(), name='fabrica-etiquetas'),
+    path('fabrica/producao/', FabricaProducaoView.as_view(), name='fabrica-producao'),
+    path('fabrica/disponivel/', FabricaDisponivelView.as_view(), name='fabrica-disponivel'),
 ]

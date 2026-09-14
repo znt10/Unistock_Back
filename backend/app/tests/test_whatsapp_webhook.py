@@ -121,6 +121,22 @@ class WebhookEvolutionTests(APITestCase):
         self.assertEqual(telefone, TELEFONE_LOJA)
         self.assertIn("Pedido #", texto)
 
+    def test_comando_pedido_com_dois_produtos_cria_dois_pedidos(self, enviar_mensagem):
+        kibe = Produto.objects.create(
+            nome_produto="Kibe", categoria=self.categoria, conta=self.conta
+        )
+        response = self.client.post(
+            URL,
+            evento_mensagem(f"pedido {self.coxinha.id}x2 {kibe.id}x1"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Pedido.objects.filter(loja=self.loja).count(), 2)
+        telefone, texto = enviar_mensagem.call_args[0]
+        self.assertIn("Pedidos criados para Loja Centro", texto)
+        self.assertIn("2x Coxinha", texto)
+        self.assertIn("1x Kibe", texto)
+
     def test_comando_pedido_sem_itens_pede_pra_repetir(self, enviar_mensagem):
         response = self.client.post(URL, evento_mensagem("pedido"), format="json")
         self.assertEqual(response.status_code, 200)

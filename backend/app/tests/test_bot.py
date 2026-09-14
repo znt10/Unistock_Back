@@ -142,13 +142,65 @@ class BotApiTests(APITestCase):
             format="json",
             **HEADERS,
         )
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["status"], "PENDENTE")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(len(response.data["pedidos"]), 2)
 
-        pedido = Pedido.objects.get(id=response.data["numero"])
-        self.assertEqual(pedido.loja, self.loja)
-        self.assertEqual(pedido.responsavel, self.responsavel)
-        self.assertEqual(pedido.itens.count(), 2)
+        pedidos = list(Pedido.objects.filter(loja=self.loja).order_by("id"))
+        self.assertEqual(len(pedidos), 2)
+        for pedido in pedidos:
+            self.assertEqual(pedido.responsavel, self.responsavel)
+            self.assertEqual(pedido.status, "PENDENTE")
+            self.assertEqual(pedido.itens.count(), 1)
+        # Primeiro pedido tambem na raiz, no formato de antes da divisao.
+        self.assertEqual(response.data["numero"], pedidos[0].id)
+
+    def test_mesmo_codigo_repetido_vira_um_pedido_so(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {
+                "telefone": TELEFONE_LOJA,
+                "itens": [
+                    {"codigo": self.coxinha.id, "quantidade": 2},
+                    {"codigo": self.coxinha.id, "quantidade": 1},
+                ],
+            },
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        pedido = Pedido.objects.get(loja=self.loja)
+        self.assertEqual(pedido.itens.get().quantidade, 3)
+
+    def test_falha_em_um_produto_desfaz_todos(self):
+        # A coca estoura o teto da loja: o pedido da coxinha, criado antes,
+        # tambem nao pode ficar.
+        Estoque.objects.create(
+            produto=self.coca, loja=self.loja,
+            quantidade_atual=5, quantidade_minima=1, quantidade_maxima=6,
+        )
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {
+                "telefone": TELEFONE_LOJA,
+                "itens": [
+                    {"codigo": self.coxinha.id, "quantidade": 1},
+                    {"codigo": self.coca.id, "quantidade": 5},
+                ],
+            },
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(Pedido.objects.filter(loja=self.loja).exists())
+
+    def test_quantidade_invalida_400(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": "abc"}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_loja_sem_responsavel_409(self):
         self.loja.responsavel = None

@@ -112,7 +112,11 @@ def executar_comando(telefone, texto):
         if response.status_code >= 400:
             return f"Nao deu: {response.data.get('error', 'erro desconhecido')}"
         dados = response.data
-        return f"Pedido #{dados['numero']} criado para {dados['loja']}. Status: {dados['status']}."
+        pedidos = dados.get("pedidos") or [dados]
+        if len(pedidos) == 1:
+            return f"Pedido #{pedidos[0]['numero']} criado para {dados['loja']}. Status: {pedidos[0]['status']}."
+        linhas = [f"Pedido #{p['numero']}: {p['quantidade']}x {p['produto']}" for p in pedidos]
+        return f"Pedidos criados para {dados['loja']}:\n" + "\n".join(linhas)
 
     if comando == "confirmar":
         numero = resto.strip()

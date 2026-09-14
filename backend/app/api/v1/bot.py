@@ -95,11 +95,18 @@ def notificacao_gerente(loja, pedido):
     if not preferencia:
         return None
 
+    pedidos = pedido if isinstance(pedido, (list, tuple)) else [pedido]
     linhas = [
         f"• {item.quantidade}x {item.produto.nome_produto}"
-        for item in pedido.itens.all()
+        for cada in pedidos
+        for item in cada.itens.all()
     ]
-    mensagem = f"🧾 Novo pedido #{pedido.id} — {loja.nome_loja}\n" + "\n".join(linhas)
+    if len(pedidos) == 1:
+        cabecalho = f"🧾 Novo pedido #{pedidos[0].id} — {loja.nome_loja}"
+    else:
+        numeros = ", ".join(f"#{cada.id}" for cada in pedidos)
+        cabecalho = f"🧾 Novos pedidos {numeros} — {loja.nome_loja}"
+    mensagem = cabecalho + "\n" + "\n".join(linhas)
     return {"telefone": preferencia.telefone_whatsapp, "mensagem": mensagem}
 
 
@@ -228,7 +235,10 @@ class BotPedidoView(BotAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        itens = []
+        # Um pedido por produto (regra do site). A mensagem "pedido 12x2 7x1"
+        # continua valendo: vira dois pedidos. Produto repetido soma num so.
+        produtos = {}
+        quantidades = {}
         for item in itens_brutos:
             # O corpo vem do bot, que repassa o que a loja digitou no WhatsApp:
             # item pode nao ser objeto, e codigo pode nao ser numero. Sem esta
@@ -240,13 +250,21 @@ class BotPedidoView(BotAPIView):
                 )
 
             codigo = item.get("codigo")
-            quantidade = item.get("quantidade")
-
             try:
                 codigo = int(codigo)
             except (TypeError, ValueError):
                 return Response(
                     {"error": f"Codigo de produto invalido: {codigo!r}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                quantidade = int(item.get("quantidade"))
+            except (TypeError, ValueError):
+                quantidade = None
+            if not quantidade or quantidade <= 0:
+                return Response(
+                    {"error": f"Quantidade invalida para o codigo {codigo}."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -262,26 +280,47 @@ class BotPedidoView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            itens.append({
-                "produto": str(produto.public_id),
-                "quantidade": quantidade,
-            })
+            produtos[produto.id] = produto
+            quantidades[produto.id] = quantidades.get(produto.id, 0) + quantidade
 
-        serializer = PedidoCreateSerializer(
-            data={"loja": str(loja.public_id), "itens": itens},
-            # PedidoCreateSerializer so usa request.user do contexto.
-            context={"request": SimpleNamespace(user=loja.responsavel)},
-        )
-        serializer.is_valid(raise_exception=True)
-        pedido = serializer.save()
+        # Todos ou nenhum: se o segundo produto estoura o teto, o primeiro
+        # pedido nao pode ficar criado sozinho.
+        with transaction.atomic():
+            pedidos = []
+            for produto_id, quantidade in quantidades.items():
+                serializer = PedidoCreateSerializer(
+                    data={
+                        "loja": str(loja.public_id),
+                        "itens": [
+                            {"produto": str(produtos[produto_id].public_id), "quantidade": quantidade}
+                        ],
+                    },
+                    # PedidoCreateSerializer so usa request.user do contexto.
+                    context={"request": SimpleNamespace(user=loja.responsavel)},
+                )
+                serializer.is_valid(raise_exception=True)
+                pedidos.append(serializer.save())
 
+        resumo = [
+            {
+                "pedido": str(pedido.public_id),
+                "numero": pedido.id,
+                "produto": produtos[produto_id].nome_produto,
+                "quantidade": quantidades[produto_id],
+                "status": pedido.status,
+            }
+            for pedido, produto_id in zip(pedidos, quantidades)
+        ]
         resposta = {
-            "pedido": str(pedido.public_id),
-            "numero": pedido.id,
-            "status": pedido.status,
             "loja": loja.nome_loja,
+            "pedidos": resumo,
+            # Primeiro pedido tambem na raiz: e o formato de antes da divisao,
+            # e o caso comum (um produto por mensagem) continua lendo igual.
+            "pedido": resumo[0]["pedido"],
+            "numero": resumo[0]["numero"],
+            "status": resumo[0]["status"],
         }
-        notificar = notificacao_gerente(loja, pedido)
+        notificar = notificacao_gerente(loja, pedidos)
         if notificar:
             resposta["notificar_gerente"] = notificar
 

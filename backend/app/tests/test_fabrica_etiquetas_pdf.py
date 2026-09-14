@@ -54,6 +54,17 @@ class EtiquetaTests(TestCase):
         self.assertEqual(tamanho_da_fonte_da_loja("Casa Verde"), "12pt")
         self.assertEqual(tamanho_da_fonte_da_loja("Zilda / Casa Verde"), "9pt")
 
+        # limites exatos das faixas: 8 e 14 ainda na faixa de baixo, 9 e 15 ja na de cima
+        casos = [
+            ("Lapa Sul", "16pt"),  # 8 caracteres
+            ("Vila Leda", "12pt"),  # 9 caracteres
+            ("Vila Andradina", "12pt"),  # 14 caracteres
+            ("Vila Prudentina", "9pt"),  # 15 caracteres
+        ]
+        for nome, esperado in casos:
+            with self.subTest(nome=nome):
+                self.assertEqual(tamanho_da_fonte_da_loja(nome), esperado)
+
     def test_so_caixas_a_caminho(self):
         Caixa.objects.filter(pedido=self.pedido, numero=1).update(situacao=Caixa.Situacao.CHEGOU)
         caixas = caixas_para_etiqueta(self.fabrica, [self.pedido.public_id])

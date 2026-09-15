@@ -138,6 +138,29 @@ class LojaSerializer(serializers.ModelSerializer):
 
         return value
 
+    def _so_gerencia_muda(self, campo, value, mensagem):
+        # Tipo e ativo decidem quem e a fabrica da empresa — e com isso quem
+        # recebe os pedidos da fabrica e se o fluxo vale para todas as lojas.
+        # O responsavel pode editar a propria loja, mas nao virar fabrica (nem
+        # desligar a fabrica) por aqui. Reenviar o valor atual sem mudar passa:
+        # o formulario de edicao manda o objeto inteiro.
+        request = self.context.get("request")
+        if request and is_gerente_ou_admin(request.user):
+            return value
+        if self.instance is not None and getattr(self.instance, campo) == value:
+            return value
+        raise PermissionDenied(mensagem)
+
+    def validate_tipo(self, value):
+        return self._so_gerencia_muda(
+            "tipo", value, "Apenas gerente ou admin pode mudar o tipo da loja."
+        )
+
+    def validate_ativo(self, value):
+        return self._so_gerencia_muda(
+            "ativo", value, "Apenas gerente ou admin pode ativar ou desativar a loja."
+        )
+
     def validate(self, data):
         senha = data.get("senha_acesso")
         if senha:

@@ -117,6 +117,18 @@ def fabrica_do_usuario(user):
     ).first()
 
 
+def tipo_da_loja_para_interface(loja):
+    """O tipo da loja como a interface deve tratar o acesso dela.
+
+    Fabrica inativa ou apagada nao e fabrica para o backend
+    (fabrica_do_usuario), entao tambem nao pode aparecer como fabrica no
+    login/me — senao a tela oferece o que o backend recusa.
+    """
+    if loja.tipo == Loja.Tipo.FABRICA and (not loja.ativo or loja.is_deleted):
+        return Loja.Tipo.LOJA
+    return loja.tipo
+
+
 def is_fabrica(user):
     return fabrica_do_usuario(user) is not None
 

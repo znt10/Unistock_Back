@@ -19,6 +19,7 @@ from app.permissions import (
     get_user_group_name,
     is_admin,
     is_gerente,
+    tipo_da_loja_para_interface,
 )
 from ..serializers import UsuarioSerializer
 from ..throttles import RegistroRateThrottle, SenhaRateThrottle
@@ -69,7 +70,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
                 "loja": {
                     "id": loja_vinculada.public_id,
                     "nome": loja_vinculada.nome_loja,
-                    "tipo": loja_vinculada.tipo,
+                    "tipo": tipo_da_loja_para_interface(loja_vinculada),
                 } if loja_vinculada else None
             })
 

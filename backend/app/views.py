@@ -21,6 +21,7 @@ from app.permissions import (
     IsGerenteOrAdministrador,
     get_conta_do_usuario,
     get_user_group_name,
+    tipo_da_loja_para_interface,
 )
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 
@@ -153,7 +154,7 @@ class LoginView(APIView):
                     "loja": {
                         "id": loja_vinculada.public_id,
                         "nome": loja_vinculada.nome_loja,
-                        "tipo": loja_vinculada.tipo,
+                        "tipo": tipo_da_loja_para_interface(loja_vinculada),
                     }
                     if loja_vinculada
                     else None,

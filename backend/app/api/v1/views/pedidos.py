@@ -4,7 +4,7 @@ from django.db.models import Count, Q
 from django.utils.timezone import make_aware
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -43,6 +43,27 @@ class ItemPedidoViewSet(ResponsavelOuAdminMixin,viewsets.ModelViewSet):
         return escopar_por_conta(
             ItemPedido.objects.all(), user, campo="pedido__loja__conta"
         )
+
+    def _bloquear_pedido_da_fabrica_impresso(self, pedido):
+        # Mesma regra do PedidoUpdateSerializer, pela porta do item: mexer no
+        # item depois de impresso deixaria as etiquetas discordando do pedido
+        # (e sem item a reimpressao quebra).
+        if pedido and pedido.da_fabrica and pedido.status != Pedido.Status.PENDENTE:
+            raise ValidationError(
+                {"status": "Pedido da fábrica só pode ser alterado enquanto está pendente."}
+            )
+
+    def perform_create(self, serializer):
+        self._bloquear_pedido_da_fabrica_impresso(serializer.validated_data.get("pedido"))
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._bloquear_pedido_da_fabrica_impresso(serializer.instance.pedido)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._bloquear_pedido_da_fabrica_impresso(instance.pedido)
+        super().perform_destroy(instance)
 
 
 

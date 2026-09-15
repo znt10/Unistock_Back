@@ -23,6 +23,7 @@ class ProdutoSerializer(serializers.ModelSerializer):
             "quantidade_por_embalagem",
             "estoque_minimo_sugerido",
             "estoque_maximo_sugerido",
+            "vem_da_fabrica",
             "categoria",
             "categoria_nome",
             "conta",

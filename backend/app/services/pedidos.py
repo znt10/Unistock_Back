@@ -15,24 +15,45 @@ delas.
 
 from django.db import transaction
 
-from app.models import Estoque, MovimentacaoEstoque, Pedido
+from app.models import Caixa, Estoque, MovimentacaoEstoque, Pedido
 from app.notifications import (
     notificar_estoque_baixo,
     notificar_estoques_baixos_do_pedido,
 )
+from app.permissions import is_gerente_ou_admin
 
 # Para onde cada status pode ir. Tabela em vez de uma sequencia de ifs porque
 # a guarda antiga olhava so ENTREGUE e deixava passar todo o resto — inclusive
 # ressuscitar um pedido cancelado.
 TRANSICOES = {
     Pedido.Status.PENDENTE: {Pedido.Status.ENTREGUE, Pedido.Status.CANCELADO},
+    # PENDENTE -> EM_ENTREGA acontece ao imprimir as etiquetas, e
+    # EM_ENTREGA -> ENTREGUE ao ler a ultima caixa: nenhuma das duas passa por
+    # aqui. Por este caminho (site e bot), de EM_ENTREGA so se cancela.
+    Pedido.Status.EM_ENTREGA: {Pedido.Status.CANCELADO},
     Pedido.Status.ENTREGUE: set(),
     Pedido.Status.CANCELADO: set(),
 }
 
+MENSAGEM_PEDIDO_DA_FABRICA = "Esse pedido é confirmado lendo as etiquetas das caixas no app."
+
 
 class TransicaoInvalida(Exception):
     """Transicao de status que a regra de negocio nao permite."""
+
+
+def _conferir_cancelamento_em_entrega(pedido, usuario):
+    """Cancelar o que ja saiu da fabrica: so gerencia, e so sem caixa lida.
+
+    Caixa lida ja moveu estoque. Cancelar por cima deixaria o estoque da loja
+    com caixas de um pedido que "nao existe".
+    """
+    if not is_gerente_ou_admin(usuario):
+        raise TransicaoInvalida("Só a gerência cancela um pedido que já saiu da fábrica.")
+    if pedido.caixas.exclude(situacao=Caixa.Situacao.A_CAMINHO).exists():
+        raise TransicaoInvalida(
+            "Esse pedido já tem caixa lida na loja e não pode ser cancelado."
+        )
 
 
 def somar_itens_no_estoque(pedido):
@@ -91,15 +112,27 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
         if status_novo == anterior:
             return pedido
 
+        if pedido.da_fabrica and status_novo != Pedido.Status.CANCELADO:
+            # Sem esta guarda, "confirmar" somava o pedido inteiro no estoque
+            # por cima do que as leituras das caixas ja somaram.
+            raise TransicaoInvalida(MENSAGEM_PEDIDO_DA_FABRICA)
+
         if status_novo not in TRANSICOES[anterior]:
             raise TransicaoInvalida(
                 f"Pedido {pedido.id} esta {anterior} e nao pode virar {status_novo}."
             )
 
+        if anterior == Pedido.Status.EM_ENTREGA:
+            _conferir_cancelamento_em_entrega(pedido, usuario_editor)
+
         pedido.status = status_novo
         # Salva o status ANTES de mexer no estoque: na ordem inversa, um erro
         # no save deixaria o estoque ja somado e o pedido ainda pendente.
         pedido.save(update_fields=['status', 'updated_at'])
+
+        if anterior == Pedido.Status.EM_ENTREGA:
+            # Etiqueta de pedido cancelado nao pode continuar valendo.
+            pedido.caixas.all().delete()
 
         if status_novo == Pedido.Status.ENTREGUE:
             somar_itens_no_estoque(pedido)

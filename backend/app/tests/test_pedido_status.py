@@ -13,8 +13,16 @@ from django.contrib.auth.models import Group, User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from app.models import Categoria, Estoque, ItemPedido, Loja, Pedido, Produto
-from app.tests.fabricas import criar_conta, vincular
+from app.models import Caixa, Categoria, Estoque, ItemPedido, Loja, Pedido, Produto
+from app.tests.fabricas import (
+    criar_conta,
+    criar_fabrica,
+    criar_gerente,
+    criar_loja,
+    criar_pedido,
+    criar_produto,
+    vincular,
+)
 
 TOKEN_BOT = "token-de-teste"
 CABECALHO_BOT = {"HTTP_X_BOT_TOKEN": TOKEN_BOT}
@@ -183,3 +191,74 @@ class TransicaoDeStatusTests(APITestCase):
         self.assertEqual(resposta.status_code, 400, resposta.data)
         pedido.refresh_from_db()
         self.assertEqual(pedido.status, Pedido.Status.PENDENTE)
+
+
+@override_settings(BOT_SERVICE_TOKEN=TOKEN_BOT)
+class PedidoDaFabricaStatusTests(APITestCase):
+    def setUp(self):
+        self.conta = criar_conta("Empresa com Fabrica")
+        self.gerente = criar_gerente("gerente-fabrica@x.com", self.conta)
+        criar_fabrica(self.conta)
+        self.lapa = criar_loja(self.conta, "Lapa", telefone_whatsapp=TELEFONE_LOJA)
+        self.coxinha = criar_produto(self.conta)
+
+    def patch_status(self, usuario, pedido, status_novo):
+        self.client.force_authenticate(usuario)
+        return self.client.patch(
+            f"/api/v1/pedidos/{pedido.public_id}/status/",
+            {"status": status_novo},
+            format="json",
+        )
+
+    def test_site_nao_marca_entregue(self):
+        pedido = criar_pedido(self.lapa, self.coxinha, da_fabrica=True)
+        resposta = self.patch_status(self.gerente, pedido, "ENTREGUE")
+        self.assertEqual(resposta.status_code, 409)
+        self.assertIn("etiquetas", resposta.data["status"])
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.status, Pedido.Status.PENDENTE)
+        self.assertFalse(Estoque.objects.filter(loja=self.lapa).exists())
+
+    def test_bot_nao_confirma(self):
+        pedido = criar_pedido(self.lapa, self.coxinha, da_fabrica=True)
+        resposta = self.client.post(
+            f"/api/v1/bot/pedido/{pedido.id}/confirmar/",
+            {"telefone": TELEFONE_LOJA},
+            format="json",
+            **CABECALHO_BOT,
+        )
+        self.assertEqual(resposta.status_code, 409)
+        self.assertIn("etiquetas", resposta.data["error"])
+
+    def test_loja_cancela_pendente(self):
+        pedido = criar_pedido(self.lapa, self.coxinha, da_fabrica=True)
+        resposta = self.patch_status(self.lapa.responsavel, pedido, "CANCELADO")
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+
+    def criar_em_entrega(self, situacao=Caixa.Situacao.A_CAMINHO):
+        pedido = criar_pedido(
+            self.lapa, self.coxinha, quantidade=2,
+            da_fabrica=True, status=Pedido.Status.EM_ENTREGA,
+        )
+        Caixa.objects.create(pedido=pedido, numero=1, codigo="caixa-1", situacao=situacao)
+        Caixa.objects.create(pedido=pedido, numero=2, codigo="caixa-2")
+        return pedido
+
+    def test_gerente_cancela_em_entrega_sem_leitura_e_apaga_caixas(self):
+        pedido = self.criar_em_entrega()
+        resposta = self.patch_status(self.gerente, pedido, "CANCELADO")
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.assertFalse(Caixa.objects.filter(pedido=pedido).exists())
+
+    def test_loja_nao_cancela_em_entrega(self):
+        pedido = self.criar_em_entrega()
+        resposta = self.patch_status(self.lapa.responsavel, pedido, "CANCELADO")
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(Caixa.objects.filter(pedido=pedido).count(), 2)
+
+    def test_nao_cancela_com_caixa_lida(self):
+        pedido = self.criar_em_entrega(situacao=Caixa.Situacao.CHEGOU)
+        resposta = self.patch_status(self.gerente, pedido, "CANCELADO")
+        self.assertEqual(resposta.status_code, 409)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.status, Pedido.Status.EM_ENTREGA)

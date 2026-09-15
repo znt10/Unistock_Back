@@ -103,6 +103,36 @@ def is_responsavel(user):
     return user.groups.filter(name="Responsavel").exists()
 
 
+def fabrica_do_usuario(user):
+    """A loja-fabrica de que este usuario e o acesso, ou None.
+
+    A fabrica usa o mesmo login das lojas (grupo Responsavel); o que a
+    distingue e o tipo da loja que ela responde.
+    """
+    if not user or not user.is_authenticated:
+        return None
+
+    return Loja.objects.filter(
+        responsavel=user, tipo=Loja.Tipo.FABRICA, ativo=True, is_deleted=False
+    ).first()
+
+
+def tipo_da_loja_para_interface(loja):
+    """O tipo da loja como a interface deve tratar o acesso dela.
+
+    Fabrica inativa ou apagada nao e fabrica para o backend
+    (fabrica_do_usuario), entao tambem nao pode aparecer como fabrica no
+    login/me — senao a tela oferece o que o backend recusa.
+    """
+    if loja.tipo == Loja.Tipo.FABRICA and (not loja.ativo or loja.is_deleted):
+        return Loja.Tipo.LOJA
+    return loja.tipo
+
+
+def is_fabrica(user):
+    return fabrica_do_usuario(user) is not None
+
+
 def get_user_group_name(user):
     """Papel do usuario para a interface: Admin, Gerente, Responsavel ou None.
 

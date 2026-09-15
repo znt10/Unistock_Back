@@ -57,6 +57,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # Serve o /static/ (CSS e JS do /admin) direto do gunicorn em producao,
+    # onde o runserver nao existe. Logo depois do SecurityMiddleware, como
+    # pede a documentacao do whitenoise.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -127,6 +131,17 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# Destino do collectstatic (roda no entrypoint.sh, com o ambiente carregado).
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    # Sem "Manifest" de proposito: a variante com manifest quebra qualquer
+    # template com {% static %} quando o collectstatic nao rodou (testes,
+    # manage.py fora do container).
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
@@ -139,6 +154,12 @@ CSRF_TRUSTED_ORIGINS = lista_do_ambiente("CSRF_TRUSTED_ORIGINS")
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+
+if not DEBUG:
+    # Em producao o Django fica atras do proxy do Coolify, que termina o HTTPS
+    # e fala HTTP com o container. Sem isto o Django acha que a requisicao e
+    # http:// e o login do /admin cai no CSRF (Origin https:// nao bate).
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 REST_FRAMEWORK = {

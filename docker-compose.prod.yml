@@ -1,0 +1,162 @@
+# Compose de PRODUCAO (Coolify / VPS). O docker-compose.yml e o de
+# desenvolvimento: runserver, codigo por bind mount e portas abertas no host.
+#
+# No Coolify: Docker Compose Location = /docker-compose.prod.yml. As variaveis
+# abaixo com ${...} sao definidas na aba Environment Variables; o resto e fixo
+# porque so faz sentido dentro desta rede. Nenhum servico publica porta: quem
+# expoe a api e o proxy do Coolify, pelo dominio configurado no servico "api"
+# (porta 8000).
+#
+# Sem YAML anchors de proposito: o Coolify reescreve este arquivo antes de
+# subir, entao cada servico repete o proprio environment.
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-Unistock}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  api:
+    build: .
+    restart: unless-stopped
+    # O entrypoint.sh roda migrate, groups e ensure_admin antes do gunicorn.
+    # Timeout maior por causa dos PDFs (WeasyPrint).
+    command: gunicorn backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY}
+      DEBUG: "False"
+      # Dominio publico da api + "api" (a Evolution chama o webhook por esse nome).
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?defina ALLOWED_HOSTS}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?defina CORS_ALLOWED_ORIGINS}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:?defina CSRF_TRUSTED_ORIGINS}
+      FRONTEND_URL: ${FRONTEND_URL:?defina FRONTEND_URL}
+      DB_ENGINE: django.db.backends.mysql
+      DB_NAME: ${DB_NAME:-Unistock}
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: db
+      DB_PORT: "3306"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:?defina DJANGO_SUPERUSER_EMAIL}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:?defina DJANGO_SUPERUSER_PASSWORD}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL}
+      BOT_SERVICE_TOKEN: ${BOT_SERVICE_TOKEN}
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      EVOLUTION_WEBHOOK_TOKEN: ${EVOLUTION_WEBHOOK_TOKEN}
+
+  worker:
+    build: .
+    restart: unless-stopped
+    # Entrypoint proprio (lista nao vazia): pula o entrypoint.sh, para as
+    # migracoes rodarem so na api. "entrypoint: []" quebra no Coolify.
+    entrypoint: ["celery", "-A", "backend", "worker", "-l", "info"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      FRONTEND_URL: ${FRONTEND_URL}
+      DB_ENGINE: django.db.backends.mysql
+      DB_NAME: ${DB_NAME:-Unistock}
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: db
+      DB_PORT: "3306"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL}
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+
+  beat:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["celery", "-A", "backend", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      DB_ENGINE: django.db.backends.mysql
+      DB_NAME: ${DB_NAME:-Unistock}
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: db
+      DB_PORT: "3306"
+      CELERY_BROKER_URL: redis://redis:6379/0
+
+  # --- Bot de WhatsApp (Evolution API, nao-oficial) ---
+  # Sem porta publica. Para conectar o numero (QR do WhatsApp) na primeira
+  # vez, use um tunel SSH ou de um dominio temporario ao servico no Coolify.
+  evolution-db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:?defina EVOLUTION_POSTGRES_PASSWORD}
+    volumes:
+      - evolution_pg_data:/var/lib/postgresql/data
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    restart: unless-stopped
+    depends_on:
+      - evolution-db
+      - redis
+    expose:
+      - "8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-db:5432/evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/1
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  mysql_data:
+  evolution_pg_data:
+  evolution_instances:

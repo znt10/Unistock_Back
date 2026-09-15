@@ -149,6 +149,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # So para o aviso de teto de estoque devolver numero como numero; todo o
+    # resto cai no handler padrao. Ver app/api/erros.py.
+    "EXCEPTION_HANDLER": "app.api.erros.tratar",
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",

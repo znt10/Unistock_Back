@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group, User
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
+from app.tests.fabricas import criar_conta, criar_gerente, criar_responsavel
 from app.models import (
     Categoria,
     Estoque,
@@ -29,44 +30,39 @@ TELEFONE_GERENTE = "5583911112222"
 @override_settings(BOT_SERVICE_TOKEN=TOKEN)
 class BotApiTests(APITestCase):
     def setUp(self):
-        Group.objects.get_or_create(name="Gerente")
-        self.gerente = User.objects.create_user(
-            username="gerente@email.com", email="gerente@email.com", password="123456",
+        self.conta = criar_conta("Empresa do Bot")
+        self.gerente = criar_gerente(
+            "gerente@email.com", self.conta, email="gerente@email.com"
         )
-        self.gerente.groups.add(Group.objects.get(name="Gerente"))
-
-        self.responsavel = User.objects.create_user(
-            username="joao@email.com",
-            email="joao@email.com",
-            password="123456",
-            first_name="Joao",
+        self.responsavel = criar_responsavel(
+            "joao@email.com", self.conta, email="joao@email.com", first_name="Joao",
         )
         self.loja = Loja.objects.create(
             nome_loja="Loja Centro",
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
-            gerente=self.gerente,
+            conta=self.conta,
             telefone_whatsapp=TELEFONE_LOJA,
         )
         self.cat_salgados = Categoria.objects.get_or_create(
-            nome="Salgados grande", gerente=self.gerente
+            nome="Salgados grande", conta=self.conta
         )[0]
         self.cat_mercado = Categoria.objects.get_or_create(
-            nome="Mercado", gerente=self.gerente
+            nome="Mercado", conta=self.conta
         )[0]
         self.coxinha = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             quantidade_por_embalagem=30,
             categoria=self.cat_salgados,
-            gerente=self.gerente,
+            conta=self.conta,
         )
         self.coca = Produto.objects.create(
             nome_produto="Coca 2L",
             unidade_medida=Produto.UnidadeMedida.UNIDADE,
             categoria=self.cat_mercado,
-            gerente=self.gerente,
+            conta=self.conta,
         )
 
     def _dar_whatsapp_ao_gerente(self, telefone=TELEFONE_GERENTE):
@@ -146,13 +142,65 @@ class BotApiTests(APITestCase):
             format="json",
             **HEADERS,
         )
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["status"], "PENDENTE")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(len(response.data["pedidos"]), 2)
 
-        pedido = Pedido.objects.get(id=response.data["numero"])
-        self.assertEqual(pedido.loja, self.loja)
-        self.assertEqual(pedido.responsavel, self.responsavel)
-        self.assertEqual(pedido.itens.count(), 2)
+        pedidos = list(Pedido.objects.filter(loja=self.loja).order_by("id"))
+        self.assertEqual(len(pedidos), 2)
+        for pedido in pedidos:
+            self.assertEqual(pedido.responsavel, self.responsavel)
+            self.assertEqual(pedido.status, "PENDENTE")
+            self.assertEqual(pedido.itens.count(), 1)
+        # Primeiro pedido tambem na raiz, no formato de antes da divisao.
+        self.assertEqual(response.data["numero"], pedidos[0].id)
+
+    def test_mesmo_codigo_repetido_vira_um_pedido_so(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {
+                "telefone": TELEFONE_LOJA,
+                "itens": [
+                    {"codigo": self.coxinha.id, "quantidade": 2},
+                    {"codigo": self.coxinha.id, "quantidade": 1},
+                ],
+            },
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        pedido = Pedido.objects.get(loja=self.loja)
+        self.assertEqual(pedido.itens.get().quantidade, 3)
+
+    def test_falha_em_um_produto_desfaz_todos(self):
+        # A coca estoura o teto da loja: o pedido da coxinha, criado antes,
+        # tambem nao pode ficar.
+        Estoque.objects.create(
+            produto=self.coca, loja=self.loja,
+            quantidade_atual=5, quantidade_minima=1, quantidade_maxima=6,
+        )
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {
+                "telefone": TELEFONE_LOJA,
+                "itens": [
+                    {"codigo": self.coxinha.id, "quantidade": 1},
+                    {"codigo": self.coca.id, "quantidade": 5},
+                ],
+            },
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(Pedido.objects.filter(loja=self.loja).exists())
+
+    def test_quantidade_invalida_400(self):
+        response = self.client.post(
+            "/api/v1/bot/pedido/",
+            {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": "abc"}]},
+            format="json",
+            **HEADERS,
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_loja_sem_responsavel_409(self):
         self.loja.responsavel = None
@@ -258,6 +306,7 @@ class BotApiTests(APITestCase):
         outra_loja = Loja.objects.create(
             nome_loja="Loja Sul", cidade="Patos", endereco="Rua B, 2",
             responsavel=outro_user,
+            conta=self.conta,
             telefone_whatsapp="5583988887777",
         )
         pedido_alheio = Pedido.objects.create(responsavel=outro_user, loja=outra_loja)
@@ -275,8 +324,7 @@ class BotApiTests(APITestCase):
     def test_remove_estoque_da_baixa_e_registra_movimentacao(self):
         estoque = Estoque.objects.create(
             produto=self.coxinha, loja=self.loja,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
         response = self.client.post(
             "/api/v1/bot/estoque/remover/",
             {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 3}]},
@@ -297,8 +345,7 @@ class BotApiTests(APITestCase):
     def test_remove_estoque_agrega_itens_com_mesmo_codigo(self):
         Estoque.objects.create(
             produto=self.coxinha, loja=self.loja,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
         response = self.client.post(
             "/api/v1/bot/estoque/remover/",
             {
@@ -318,8 +365,7 @@ class BotApiTests(APITestCase):
     def test_remove_estoque_insuficiente_409(self):
         Estoque.objects.create(
             produto=self.coxinha, loja=self.loja,
-            quantidade_atual=2, quantidade_minima=2,
-        )
+            quantidade_atual=2, quantidade_minima=2, quantidade_maxima=999,)
         response = self.client.post(
             "/api/v1/bot/estoque/remover/",
             {"telefone": TELEFONE_LOJA, "itens": [{"codigo": self.coxinha.id, "quantidade": 5}]},
@@ -363,8 +409,7 @@ class BotApiTests(APITestCase):
     def test_remove_estoque_quantidade_invalida_400(self):
         Estoque.objects.create(
             produto=self.coxinha, loja=self.loja,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
         for quantidade in (0, -1, "abc"):
             with self.subTest(quantidade=quantidade):
                 response = self.client.post(
@@ -382,16 +427,15 @@ class BotApiTests(APITestCase):
         outra_loja = Loja.objects.create(
             nome_loja="Loja Sul", cidade="Patos", endereco="Rua B, 2",
             responsavel=outro_user,
+            conta=self.conta,
             telefone_whatsapp="5583988887777",
         )
         Estoque.objects.create(
             produto=self.coxinha, loja=self.loja,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
         estoque_outra_loja = Estoque.objects.create(
             produto=self.coxinha, loja=outra_loja,
-            quantidade_atual=10, quantidade_minima=2,
-        )
+            quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
 
         response = self.client.post(
             "/api/v1/bot/estoque/remover/",

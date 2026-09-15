@@ -106,8 +106,13 @@ def _label_periodo(periodo: Periodo, inicio, fim) -> str:
     return f"{inicio.strftime(fmt)} a {fim.strftime(fmt)}"
 
 
-def _buscar_pedidos(periodo: Periodo, ref_local):
-    """Pedidos do período (dia/semana/mês) em torno da data de referência."""
+def _buscar_pedidos(periodo: Periodo, ref_local, conta=None):
+    """Pedidos do período (dia/semana/mês) em torno da data de referência.
+
+    `conta` limita o relatório a uma empresa. None significa "todas" — é o
+    relatório do dono da plataforma, não um default para qualquer chamador:
+    quem gera em nome de um usuário precisa passar a conta dele.
+    """
     inicio, fim = _intervalo(periodo, ref_local)
 
     pedidos = (
@@ -116,6 +121,8 @@ def _buscar_pedidos(periodo: Periodo, ref_local):
         .prefetch_related("itens__produto")
         .order_by("loja__nome_loja", "responsavel__first_name", "-data_pedido")
     )
+    if conta is not None:
+        pedidos = pedidos.filter(loja__conta=conta)
     return inicio, fim, list(pedidos)
 
 
@@ -381,15 +388,16 @@ def _html(context: dict) -> str:
 # ─── Função pública genérica ──────────────────────────────────────────────────
 
 def gerar_relatorio_pedidos_pdf(
-    periodo: Periodo = "dia", data_ref: date | None = None
+    periodo: Periodo = "dia", data_ref: date | None = None, conta=None
 ) -> HttpResponse:
     """
-    Gera o relatório PDF (todas as lojas) para o período informado.
+    Gera o relatório PDF para o período informado.
 
     periodo:  "dia" | "semana" | "mes".
     data_ref: data de referência (default = hoje). Ex.: data_ref=date(2026, 7, 3)
               com periodo="dia" gera o relatório daquele dia específico; com
               "semana"/"mes", a semana/mês que contém essa data.
+    conta:    limita às lojas de uma empresa. None = todas, só para o Admin.
     """
     from weasyprint import HTML
 
@@ -401,15 +409,18 @@ def gerar_relatorio_pedidos_pdf(
     else:
         ref_local = agora_local
 
-    inicio, fim, pedidos = _buscar_pedidos(periodo, ref_local)
+    inicio, fim, pedidos = _buscar_pedidos(periodo, ref_local, conta)
     lojas       = _montar_lojas(pedidos)
     total_itens = sum(lr.total_itens for lr in lojas)
 
     # Período anterior equivalente, para os deltas dos KPIs.
     pi, pf = _intervalo_anterior(periodo, inicio)
-    pedidos_ant = list(
-        Pedido.objects.filter(data_pedido__range=(pi, pf)).prefetch_related("itens")
-    )
+    # O periodo anterior tem que usar o MESMO recorte de empresa, senao os
+    # deltas dos KPIs comparam uma empresa contra o sistema inteiro.
+    anteriores = Pedido.objects.filter(data_pedido__range=(pi, pf))
+    if conta is not None:
+        anteriores = anteriores.filter(loja__conta=conta)
+    pedidos_ant = list(anteriores.prefetch_related("itens"))
     n_ped_ant, n_itens_ant, n_lojas_ant = _totais(pedidos_ant)
 
     context = {

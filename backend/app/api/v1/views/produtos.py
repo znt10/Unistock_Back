@@ -1,10 +1,10 @@
 from rest_framework import viewsets
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 
-from app.models import Loja, Produto
-from app.permissions import IsGerenteOrAdministrador, is_admin, is_gerente
+from app.models import Produto
+from app.permissions import IsGerenteOrAdministrador, escopar_por_conta
 from ..serializers import ProdutoSerializer
+from .conta import conta_do_request
 
 
 # 🔹 PRODUTO
@@ -14,20 +14,9 @@ class ProdutoViewSet(viewsets.ModelViewSet):
     lookup_field = 'public_id'
 
     def get_queryset(self):
-        user = self.request.user
-        queryset = Produto.objects.all().order_by('nome_produto')
-
-        if is_admin(user):
-            return queryset
-        if is_gerente(user):
-            return queryset.filter(gerente=user)
-
-        # Responsavel: catalogo do gerente da propria loja, nao o de outra
-        # empresa. Sem loja/gerente atribuido, nao ve nenhum produto.
-        loja = Loja.objects.filter(responsavel=user).first()
-        if not loja or not loja.gerente_id:
-            return queryset.none()
-        return queryset.filter(gerente_id=loja.gerente_id)
+        return escopar_por_conta(
+            Produto.objects.all().order_by('nome_produto'), self.request.user
+        )
 
     def get_permissions(self):
         if self.action == 'list':
@@ -36,21 +25,4 @@ class ProdutoViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), IsGerenteOrAdministrador()]
 
     def perform_create(self, serializer):
-        user = self.request.user
-        if "gerente" in self.request.data and not is_admin(user):
-            raise PermissionDenied("Apenas admin pode definir o gerente do produto.")
-
-        if is_gerente(user) and not is_admin(user) and "gerente" not in self.request.data:
-            # Mesmo padrao de Loja: quem cria vira o dono, senao perderia
-            # acesso de escrita ao proprio produto logo em seguida.
-            serializer.save(gerente=user)
-            return
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        if "gerente" in self.request.data:
-            raise PermissionDenied(
-                "O gerente do produto e definido na criacao e nao pode ser alterado."
-            )
-        serializer.save()
+        serializer.save(conta=conta_do_request(self.request))

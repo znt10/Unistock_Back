@@ -17,7 +17,12 @@ from datetime import date
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest
 
 from app.models import Loja
-from app.permissions import IsGerenteOrAdministrador, get_user_group_name
+from app.permissions import (
+    IsGerenteOrAdministrador,
+    get_conta_do_usuario,
+    get_user_group_name,
+    tipo_da_loja_para_interface,
+)
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
 
 User = get_user_model()
@@ -26,10 +31,10 @@ permission_classes = [IsAuthenticated]
 
 
 class RelatorioPdfView(APIView):
-    """GET /gerar_pdf/ — relatório de pedidos de TODAS as lojas.
+    """GET /gerar_pdf/ — relatório de pedidos das lojas da empresa.
 
-    Restrito a gerente/admin: o relatório é global, um responsável de loja
-    não deve enxergar os pedidos das outras.
+    Restrito a gerente/admin: um responsável de loja não deve enxergar os
+    pedidos das outras. O Admin (sem conta) recebe o relatório global.
     """
 
     permission_classes = [IsAuthenticated, IsGerenteOrAdministrador]
@@ -48,7 +53,9 @@ class RelatorioPdfView(APIView):
             except ValueError:
                 return HttpResponseBadRequest("Parâmetro 'data' inválido; use AAAA-MM-DD.")
 
-        return gerar_relatorio_pedidos_pdf(periodo, data_ref)
+        return gerar_relatorio_pedidos_pdf(
+            periodo, data_ref, conta=get_conta_do_usuario(request.user)
+        )
 
 
 relatorio_pdf = RelatorioPdfView.as_view()
@@ -147,6 +154,7 @@ class LoginView(APIView):
                     "loja": {
                         "id": loja_vinculada.public_id,
                         "nome": loja_vinculada.nome_loja,
+                        "tipo": tipo_da_loja_para_interface(loja_vinculada),
                     }
                     if loja_vinculada
                     else None,

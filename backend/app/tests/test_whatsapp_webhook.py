@@ -5,6 +5,7 @@ from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from app.models import Categoria, Estoque, Loja, Pedido, Produto
+from app.tests.fabricas import criar_conta, criar_gerente, criar_responsavel
 
 TOKEN = "token-de-teste"
 WEBHOOK_TOKEN = "webhook-secreto"
@@ -26,35 +27,30 @@ def evento_mensagem(texto, telefone=TELEFONE_LOJA, from_me=False):
 @patch("app.api.v1.whatsapp_webhook.enviar_mensagem")
 class WebhookEvolutionTests(APITestCase):
     def setUp(self):
-        Group.objects.get_or_create(name="Gerente")
-        self.gerente = User.objects.create_user(
-            username="gerente@email.com", email="gerente@email.com", password="123456",
+        self.conta = criar_conta("Empresa do Webhook")
+        self.gerente = criar_gerente(
+            "gerente@email.com", self.conta, email="gerente@email.com"
         )
-        self.gerente.groups.add(Group.objects.get(name="Gerente"))
-
-        self.responsavel = User.objects.create_user(
-            username="joao@email.com",
-            email="joao@email.com",
-            password="123456",
-            first_name="Joao",
+        self.responsavel = criar_responsavel(
+            "joao@email.com", self.conta, email="joao@email.com", first_name="Joao",
         )
         self.loja = Loja.objects.create(
             nome_loja="Loja Centro",
             cidade="Patos",
             endereco="Rua A, 1",
             responsavel=self.responsavel,
-            gerente=self.gerente,
+            conta=self.conta,
             telefone_whatsapp=TELEFONE_LOJA,
         )
         self.categoria = Categoria.objects.get_or_create(
-            nome="Salgados grande", gerente=self.gerente
+            nome="Salgados grande", conta=self.conta
         )[0]
         self.coxinha = Produto.objects.create(
             nome_produto="Coxinha",
             unidade_medida=Produto.UnidadeMedida.CAIXA,
             quantidade_por_embalagem=30,
             categoria=self.categoria,
-            gerente=self.gerente,
+            conta=self.conta,
         )
 
     # --- controle de acesso ---
@@ -125,6 +121,22 @@ class WebhookEvolutionTests(APITestCase):
         self.assertEqual(telefone, TELEFONE_LOJA)
         self.assertIn("Pedido #", texto)
 
+    def test_comando_pedido_com_dois_produtos_cria_dois_pedidos(self, enviar_mensagem):
+        kibe = Produto.objects.create(
+            nome_produto="Kibe", categoria=self.categoria, conta=self.conta
+        )
+        response = self.client.post(
+            URL,
+            evento_mensagem(f"pedido {self.coxinha.id}x2 {kibe.id}x1"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Pedido.objects.filter(loja=self.loja).count(), 2)
+        telefone, texto = enviar_mensagem.call_args[0]
+        self.assertIn("Pedidos criados para Loja Centro", texto)
+        self.assertIn("2x Coxinha", texto)
+        self.assertIn("1x Kibe", texto)
+
     def test_comando_pedido_sem_itens_pede_pra_repetir(self, enviar_mensagem):
         response = self.client.post(URL, evento_mensagem("pedido"), format="json")
         self.assertEqual(response.status_code, 200)
@@ -147,8 +159,7 @@ class WebhookEvolutionTests(APITestCase):
 
     def test_comando_remover_da_baixa(self, enviar_mensagem):
         estoque = Estoque.objects.create(
-            produto=self.coxinha, loja=self.loja, quantidade_atual=10, quantidade_minima=2,
-        )
+            produto=self.coxinha, loja=self.loja, quantidade_atual=10, quantidade_minima=2, quantidade_maxima=999,)
         response = self.client.post(
             URL, evento_mensagem(f"remover {self.coxinha.id}x3"), format="json"
         )

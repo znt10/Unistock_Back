@@ -3,11 +3,13 @@ from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
 
 from app.models import Categoria, Loja, Produto
+from app.tests.fabricas import criar_conta, vincular
 
 
 class PedidoAPITestCase(APITestCase):
 
     def setUp(self):
+        self.conta = criar_conta()
         self.client = APIClient()
 
         # Criar grupos
@@ -21,6 +23,7 @@ class PedidoAPITestCase(APITestCase):
             password='123'
         )
         self.responsavel.groups.add(self.grupo_responsavel)
+        vincular(self.responsavel, self.conta)
 
         # Usuário gerente
         self.gerente = User.objects.create_user(
@@ -28,6 +31,7 @@ class PedidoAPITestCase(APITestCase):
             password='123'
         )
         self.gerente.groups.add(self.grupo_gerente)
+        vincular(self.gerente, self.conta)
 
         # Usuário admin
         self.admin = User.objects.create_user(
@@ -37,17 +41,19 @@ class PedidoAPITestCase(APITestCase):
         self.admin.groups.add(self.grupo_admin)
 
 
-        self.categoria = Categoria.objects.get_or_create(nome="Salgados grande")[0]
+        self.categoria = Categoria.objects.create(nome="Salgados grande", conta=self.conta)
         self.produto = Produto.objects.create(
             nome_produto="coxinha",
             unidade_medida="QUILO",
             categoria=self.categoria,
+            conta=self.conta,
         )
         # Loja
         self.loja = Loja.objects.create(
             nome_loja='Loja A',
             endereco='Rua 1',
-            responsavel=self.responsavel
+            responsavel=self.responsavel,
+            conta=self.conta,
         )
 
 
@@ -67,6 +73,7 @@ class PedidoAPITestCase(APITestCase):
             "email": "novo@email.com",
             "password": "SenhaForte#2026",
             "tipo_usuario": "gerente",
+            "conta": str(self.conta.public_id),
         })
         self.assertEqual(response.status_code, 201, response.data)
         self.client.force_authenticate(user=None)

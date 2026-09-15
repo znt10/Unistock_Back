@@ -1,8 +1,8 @@
-from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Q
 
-from app.models import Categoria, Produto
+from app.models import Categoria, Conta, Produto
 
 
 PRODUTOS = {
@@ -104,20 +104,20 @@ class Command(BaseCommand):
             help="Remove todos os produtos antes de cadastrar a lista padrao.",
         )
         parser.add_argument(
-            "--gerente",
+            "--conta",
             help=(
-                "Email do gerente dono deste catalogo. Se omitido e so existir "
-                "um gerente no sistema, usa ele; com zero ou mais de um, precisa "
-                "informar explicitamente."
+                "Nome ou slug da empresa dona deste catalogo. Se omitido e so "
+                "existir uma conta no sistema, usa ela; com zero ou mais de "
+                "uma, precisa informar explicitamente."
             ),
         )
 
     @transaction.atomic
     def handle(self, *args, **options):
-        gerente = self._resolver_gerente(options["gerente"])
+        conta = self._resolver_conta(options["conta"])
 
         if options["limpar"]:
-            total_removidos, _ = Produto.objects.filter(gerente=gerente).delete()
+            total_removidos, _ = Produto.objects.filter(conta=conta).delete()
             self.stdout.write(f"Registros removidos: {total_removidos}")
 
         criados = 0
@@ -125,7 +125,7 @@ class Command(BaseCommand):
 
         for indice, (nome_categoria, nomes) in enumerate(PRODUTOS.items()):
             categoria, _ = Categoria.objects.get_or_create(
-                nome=nome_categoria, gerente=gerente, defaults={"ordem": indice}
+                nome=nome_categoria, conta=conta, defaults={"ordem": indice}
             )
             for nome in nomes:
                 _, created = Produto.objects.update_or_create(
@@ -135,7 +135,7 @@ class Command(BaseCommand):
                         "unidade_medida": Produto.UnidadeMedida.UNIDADE,
                         "quantidade_por_embalagem": None,
                         "estoque_minimo_sugerido": 1,
-                        "gerente": gerente,
+                        "conta": conta,
                     },
                 )
 
@@ -146,25 +146,29 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Produtos cadastrados para {gerente.email}. "
+                f"Produtos cadastrados para {conta.nome}. "
                 f"Criados: {criados}. Atualizados: {atualizados}."
             )
         )
 
-    def _resolver_gerente(self, email):
-        if email:
-            try:
-                return User.objects.get(email__iexact=email, groups__name="Gerente")
-            except User.DoesNotExist:
-                raise CommandError(f"Nenhum gerente encontrado com o email {email!r}.")
+    def _resolver_conta(self, identificador):
+        if identificador:
+            conta = Conta.objects.filter(
+                Q(nome__iexact=identificador) | Q(slug=identificador)
+            ).first()
+            if not conta:
+                raise CommandError(f"Nenhuma empresa encontrada: {identificador!r}.")
+            return conta
 
-        gerentes = User.objects.filter(groups__name="Gerente")
-        total = gerentes.count()
+        contas = Conta.objects.all()
+        total = contas.count()
         if total == 1:
-            return gerentes.first()
+            return contas.first()
         if total == 0:
-            raise CommandError("Nao ha nenhum gerente cadastrado ainda.")
+            raise CommandError(
+                "Nao ha nenhuma empresa cadastrada ainda — crie uma no /admin."
+            )
         raise CommandError(
-            "Mais de um gerente cadastrado — informe --gerente <email> pra "
+            "Mais de uma empresa cadastrada — informe --conta <nome|slug> pra "
             "dizer de quem e este catalogo."
         )

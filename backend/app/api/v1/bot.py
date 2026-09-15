@@ -31,8 +31,10 @@ from app.models import (
     PreferenciaNotificacao,
     Produto,
 )
+from app.permissions import get_conta_do_usuario
 from app.notifications import notificar_estoque_baixo
 from app.relatorios.pedidos_pdf import gerar_relatorio_pedidos_pdf
+from app.services.fabrica import segue_fluxo_fabrica
 from app.services.pedidos import TransicaoInvalida, mudar_status
 from .serializers import PedidoCreateSerializer
 
@@ -41,41 +43,70 @@ def normalizar_telefone(valor):
     return re.sub(r"\D", "", str(valor or ""))
 
 
-def eh_gerente(telefone):
-    """True se o telefone for o WhatsApp cadastrado de algum Gerente.
+def gerente_do_telefone(telefone):
+    """O usuario Gerente dono deste WhatsApp, ou None.
 
     Cada gerente configura o proprio numero em Preferencias de notificacao
-    (mesma tela/campo que ja existe para qualquer usuario) — nao existe mais
-    um unico numero global de gerente.
+    (mesma tela/campo que ja existe para qualquer usuario) — nao existe um
+    unico numero global de gerente.
+
+    Devolve o usuario, e nao um booleano, porque quem pergunta precisa saber
+    QUAL gerente e para escopar a resposta na empresa dele.
     """
     numero = normalizar_telefone(telefone)
     if not numero:
-        return False
-    return PreferenciaNotificacao.objects.filter(
-        usuario__groups__name="Gerente", telefone_whatsapp=numero
-    ).exists()
+        return None
+    preferencia = (
+        PreferenciaNotificacao.objects
+        .filter(usuario__groups__name="Gerente", telefone_whatsapp=numero)
+        .select_related("usuario")
+        .first()
+    )
+    return preferencia.usuario if preferencia else None
+
+
+def eh_gerente(telefone):
+    """True se o telefone for o WhatsApp cadastrado de algum Gerente."""
+    return gerente_do_telefone(telefone) is not None
 
 
 def notificacao_gerente(loja, pedido):
-    """Bloco pronto pro bot avisar o gerente DESTA loja, ou None se nao da.
+    """Bloco pronto pro bot avisar a gerencia DESTA empresa, ou None se nao da.
 
-    Nao da quando: a loja nao tem gerente atribuido, o gerente nao configurou
-    telefone de WhatsApp, ou desativou o canal (whatsapp_ativo=False).
+    Nao da quando: ninguem da empresa esta no grupo Gerente, nenhum deles
+    configurou telefone de WhatsApp, ou todos desativaram o canal
+    (whatsapp_ativo=False).
+
+    Com dois gerentes na mesma conta o bot avisa UM deles (o primeiro com
+    WhatsApp ativo) — o bot manda uma mensagem, nao faz difusao. Quem quer
+    todos avisados usa o email/digest, que ja e por pessoa.
     """
-    if not loja.gerente_id:
-        return None
-
-    preferencia = PreferenciaNotificacao.objects.filter(
-        usuario_id=loja.gerente_id, whatsapp_ativo=True
-    ).exclude(telefone_whatsapp="").first()
+    preferencia = (
+        PreferenciaNotificacao.objects
+        .filter(
+            usuario__perfil__conta_id=loja.conta_id,
+            usuario__groups__name="Gerente",
+            whatsapp_ativo=True,
+        )
+        .exclude(telefone_whatsapp="")
+        .order_by("usuario_id")
+        .first()
+    )
     if not preferencia:
         return None
 
+    pedidos = pedido if isinstance(pedido, (list, tuple)) else [pedido]
     linhas = [
         f"• {item.quantidade}x {item.produto.nome_produto}"
-        for item in pedido.itens.all()
+        for cada in pedidos
+        for item in cada.itens.all()
     ]
-    mensagem = f"🧾 Novo pedido #{pedido.id} — {loja.nome_loja}\n" + "\n".join(linhas)
+    if len(pedidos) == 1:
+        cabecalho = f"🧾 Novo pedido #{pedidos[0].id} — {loja.nome_loja}"
+    else:
+        numeros = ", ".join(f"#{cada.id}" for cada in pedidos)
+        cabecalho = f"🧾 Novos pedidos {numeros} — {loja.nome_loja}"
+    mensagem = cabecalho + "\n" + "\n".join(linhas)
     return {"telefone": preferencia.telefone_whatsapp, "mensagem": mensagem}
 
 
@@ -140,8 +171,8 @@ class BotContatoView(BotAPIView):
 
 
 class BotCatalogoView(BotAPIView):
-    """GET /api/v1/bot/catalogo/?telefone=... — categorias e produtos do
-    gerente da loja que perguntou (cada empresa so ve o proprio catalogo).
+    """GET /api/v1/bot/catalogo/?telefone=... — categorias e produtos da
+    empresa da loja que perguntou (cada empresa so ve o proprio catalogo).
 
     Usa o id inteiro do produto como codigo digitavel no chat.
     """
@@ -151,11 +182,8 @@ class BotCatalogoView(BotAPIView):
         if not loja:
             return self.erro_loja()
 
-        if not loja.gerente_id:
-            return Response({"categorias": []})
-
         produtos = (
-            Produto.objects.filter(is_deleted=False, gerente_id=loja.gerente_id)
+            Produto.objects.filter(is_deleted=False, conta_id=loja.conta_id)
             .select_related("categoria")
             .order_by("nome_produto")
         )
@@ -169,7 +197,7 @@ class BotCatalogoView(BotAPIView):
             })
 
         categorias_com_produtos = Categoria.objects.filter(
-            id__in=por_categoria.keys(), gerente_id=loja.gerente_id
+            id__in=por_categoria.keys(), conta_id=loja.conta_id
         )
 
         categorias = [
@@ -207,7 +235,10 @@ class BotPedidoView(BotAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        itens = []
+        # Um pedido por produto (regra do site). A mensagem "pedido 12x2 7x1"
+        # continua valendo: vira dois pedidos. Produto repetido soma num so.
+        produtos = {}
+        quantidades = {}
         for item in itens_brutos:
             # O corpo vem do bot, que repassa o que a loja digitou no WhatsApp:
             # item pode nao ser objeto, e codigo pode nao ser numero. Sem esta
@@ -219,8 +250,6 @@ class BotPedidoView(BotAPIView):
                 )
 
             codigo = item.get("codigo")
-            quantidade = item.get("quantidade")
-
             try:
                 codigo = int(codigo)
             except (TypeError, ValueError):
@@ -229,11 +258,21 @@ class BotPedidoView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # gerente_id=loja.gerente_id: mesma barreira do catalogo — sem
+            try:
+                quantidade = int(item.get("quantidade"))
+            except (TypeError, ValueError):
+                quantidade = None
+            if not quantidade or quantidade <= 0:
+                return Response(
+                    {"error": f"Quantidade invalida para o codigo {codigo}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # conta_id=loja.conta_id: mesma barreira do catalogo — sem
             # isso, uma loja poderia mexer no produto de outra empresa so
             # adivinhando o codigo (id sequencial e digitavel de proposito).
             produto = Produto.objects.filter(
-                id=codigo, is_deleted=False, gerente_id=loja.gerente_id
+                id=codigo, is_deleted=False, conta_id=loja.conta_id
             ).first()
             if not produto:
                 return Response(
@@ -241,26 +280,47 @@ class BotPedidoView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            itens.append({
-                "produto": str(produto.public_id),
-                "quantidade": quantidade,
-            })
+            produtos[produto.id] = produto
+            quantidades[produto.id] = quantidades.get(produto.id, 0) + quantidade
 
-        serializer = PedidoCreateSerializer(
-            data={"loja": str(loja.public_id), "itens": itens},
-            # PedidoCreateSerializer so usa request.user do contexto.
-            context={"request": SimpleNamespace(user=loja.responsavel)},
-        )
-        serializer.is_valid(raise_exception=True)
-        pedido = serializer.save()
+        # Todos ou nenhum: se o segundo produto estoura o teto, o primeiro
+        # pedido nao pode ficar criado sozinho.
+        with transaction.atomic():
+            pedidos = []
+            for produto_id, quantidade in quantidades.items():
+                serializer = PedidoCreateSerializer(
+                    data={
+                        "loja": str(loja.public_id),
+                        "itens": [
+                            {"produto": str(produtos[produto_id].public_id), "quantidade": quantidade}
+                        ],
+                    },
+                    # PedidoCreateSerializer so usa request.user do contexto.
+                    context={"request": SimpleNamespace(user=loja.responsavel)},
+                )
+                serializer.is_valid(raise_exception=True)
+                pedidos.append(serializer.save())
 
+        resumo = [
+            {
+                "pedido": str(pedido.public_id),
+                "numero": pedido.id,
+                "produto": produtos[produto_id].nome_produto,
+                "quantidade": quantidades[produto_id],
+                "status": pedido.status,
+            }
+            for pedido, produto_id in zip(pedidos, quantidades)
+        ]
         resposta = {
-            "pedido": str(pedido.public_id),
-            "numero": pedido.id,
-            "status": pedido.status,
             "loja": loja.nome_loja,
+            "pedidos": resumo,
+            # Primeiro pedido tambem na raiz: e o formato de antes da divisao,
+            # e o caso comum (um produto por mensagem) continua lendo igual.
+            "pedido": resumo[0]["pedido"],
+            "numero": resumo[0]["numero"],
+            "status": resumo[0]["status"],
         }
-        notificar = notificacao_gerente(loja, pedido)
+        notificar = notificacao_gerente(loja, pedidos)
         if notificar:
             resposta["notificar_gerente"] = notificar
 
@@ -356,16 +416,22 @@ class BotEstoqueRemoverView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # gerente_id=loja.gerente_id: mesma barreira do catalogo — sem
+            # conta_id=loja.conta_id: mesma barreira do catalogo — sem
             # isso, uma loja poderia mexer no produto de outra empresa so
             # adivinhando o codigo (id sequencial e digitavel de proposito).
             produto = Produto.objects.filter(
-                id=codigo, is_deleted=False, gerente_id=loja.gerente_id
+                id=codigo, is_deleted=False, conta_id=loja.conta_id
             ).first()
             if not produto:
                 return Response(
                     {"error": f"Produto de codigo {codigo} nao encontrado."},
                     status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if segue_fluxo_fabrica(produto):
+                return Response(
+                    {"error": "Esse produto é da fábrica: dê baixa lendo a etiqueta da caixa."},
+                    status=status.HTTP_409_CONFLICT,
                 )
 
             produtos_por_id[produto.id] = produto
@@ -427,16 +493,15 @@ class BotRelatorioView(BotAPIView):
     Qualquer outro telefone recebe 403. `periodo` default "dia"; `data` opcional
     escolhe um dia/semana/mês específico (default = hoje).
 
-    LIMITACAO CONHECIDA: o relatorio ainda e global (TODAS as lojas do banco,
-    nao so as do gerente que perguntou) — nao foi escopado por gerente junto
-    com o catalogo. Sem problema enquanto so existe um gerente; com mais de
-    um, cada um veria pedido de empresa alheia. Ver card "Multi-empresa" no
-    Trello.
+    O PDF sai escopado na empresa do gerente que perguntou. Ate a camada de
+    Conta existir ele era global (TODAS as lojas do banco), o que so nao
+    vazava porque existia um gerente so.
     """
 
     def get(self, request):
         # Só o gerente vê PDF. Loja nenhuma acessa o relatório.
-        if not eh_gerente(request.query_params.get("telefone")):
+        gerente = gerente_do_telefone(request.query_params.get("telefone"))
+        if not gerente:
             return Response(
                 {"error": "Apenas o gerente pode gerar o relatório."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -457,5 +522,7 @@ class BotRelatorioView(BotAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Gerente sempre recebe o relatório de TODAS as lojas.
-        return gerar_relatorio_pedidos_pdf(periodo, data_ref)
+        # O relatório é o das lojas da empresa dele, e só delas.
+        return gerar_relatorio_pedidos_pdf(
+            periodo, data_ref, conta=get_conta_do_usuario(gerente)
+        )

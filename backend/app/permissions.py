@@ -52,13 +52,47 @@ def is_gerente_ou_admin(user):
     return is_admin(user) or is_gerente(user)
 
 
-def lojas_do_gerente(user):
-    """Lojas que este Gerente administra (Loja.gerente=user). Admin: todas."""
+def get_conta_do_usuario(user):
+    """A conta do usuario logado, ou None para quem ve tudo/nada.
+
+    None tem dois significados OPOSTOS de proposito, e quem chama precisa
+    saber a diferenca: superuser/Admin enxerga todas as contas; qualquer outro
+    usuario sem perfil nao enxerga nenhuma. Por isso todo get_queryset checa
+    is_admin ANTES de chamar esta funcao.
+
+    E a unica pergunta de escopo do sistema. Antes da camada de Conta a mesma
+    pergunta era feita de tres jeitos diferentes conforme o papel — gerente
+    filtrava por Loja.gerente, responsavel descobria o dono via a propria loja,
+    e a listagem de Loja nao filtrava nada para responsavel.
+    """
+    if not user or not user.is_authenticated or is_admin(user):
+        return None
+
+    perfil = getattr(user, "perfil", None)
+    return perfil.conta if perfil else None
+
+
+def escopar_por_conta(queryset, user, campo="conta"):
+    """O queryset limitado ao que este usuario pode ver.
+
+    `campo` e o caminho ate a conta: os models que tem a FK direto usam o
+    padrao; Pedido/Estoque, que so alcancam a conta pela loja, passam
+    "loja__conta". Pedido e Estoque nao tem FK propria de conta de proposito —
+    duas fontes de verdade para o mesmo fato divergem.
+    """
     if is_admin(user):
-        return Loja.objects.all()
-    if is_gerente(user):
-        return Loja.objects.filter(gerente=user)
-    return Loja.objects.none()
+        return queryset
+
+    conta = get_conta_do_usuario(user)
+    if not conta:
+        return queryset.none()
+
+    return queryset.filter(**{campo: conta})
+
+
+def lojas_da_conta(user):
+    """Lojas que este usuario enxerga. Admin: todas."""
+    return escopar_por_conta(Loja.objects.all(), user)
 
 
 def is_responsavel(user):
@@ -67,6 +101,36 @@ def is_responsavel(user):
         return False
 
     return user.groups.filter(name="Responsavel").exists()
+
+
+def fabrica_do_usuario(user):
+    """A loja-fabrica de que este usuario e o acesso, ou None.
+
+    A fabrica usa o mesmo login das lojas (grupo Responsavel); o que a
+    distingue e o tipo da loja que ela responde.
+    """
+    if not user or not user.is_authenticated:
+        return None
+
+    return Loja.objects.filter(
+        responsavel=user, tipo=Loja.Tipo.FABRICA, ativo=True, is_deleted=False
+    ).first()
+
+
+def tipo_da_loja_para_interface(loja):
+    """O tipo da loja como a interface deve tratar o acesso dela.
+
+    Fabrica inativa ou apagada nao e fabrica para o backend
+    (fabrica_do_usuario), entao tambem nao pode aparecer como fabrica no
+    login/me — senao a tela oferece o que o backend recusa.
+    """
+    if loja.tipo == Loja.Tipo.FABRICA and (not loja.ativo or loja.is_deleted):
+        return Loja.Tipo.LOJA
+    return loja.tipo
+
+
+def is_fabrica(user):
+    return fabrica_do_usuario(user) is not None
 
 
 def get_user_group_name(user):
@@ -99,8 +163,8 @@ class IsGerenteOrAdministradorOrResponsavel(BasePermission):
     no get_queryset de cada viewset, nao aqui; as duas pontas precisam ser
     lidas juntas.
 
-    Escrita: Admin em qualquer loja; Gerente so nas lojas atribuidas a ele
-    (Loja.gerente); responsavel so na propria.
+    Escrita: Admin em qualquer loja; Gerente so nas lojas da conta dele;
+    responsavel so na propria.
     """
 
     def has_permission(self, request, view):
@@ -123,9 +187,13 @@ class IsGerenteOrAdministradorOrResponsavel(BasePermission):
         if is_admin(user):
             return True
 
+        conta = get_conta_do_usuario(user)
+        if not conta:
+            return False
+
         if is_gerente(user):
             loja = obj if isinstance(obj, Loja) else getattr(obj, "loja", None)
-            return loja is not None and loja.gerente_id == user.id
+            return loja is not None and loja.conta_id == conta.id
 
         if is_responsavel(user):
             # Objeto com FK de loja (Estoque, Pedido): tem que ser de uma loja

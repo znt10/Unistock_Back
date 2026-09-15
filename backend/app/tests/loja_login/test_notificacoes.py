@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 
 from app.models import Loja
+from app.tests.fabricas import criar_conta
 
 
 class NotificacaoObsoletaTests(TestCase):
@@ -18,13 +19,17 @@ class NotificacaoObsoletaTests(TestCase):
     def setUp(self):
         from app.models import Categoria, Produto
 
+        self.conta = criar_conta("Empresa da Lapa")
         self.dono = User.objects.create_user(username='dono@unistock.com', password='123')
         self.loja = Loja.objects.create(
             nome_loja='Lapa', cidade='Patos', endereco='Rua 1', responsavel=self.dono,
+            conta=self.conta,
         )
-        categoria = Categoria.objects.get_or_create(nome='Salgados grande')[0]
+        categoria = Categoria.objects.create(
+            nome='Salgados grande', conta=self.conta
+        )
         self.produto = Produto.objects.create(
-            nome_produto='Coxinha', categoria=categoria,
+            nome_produto='Coxinha', categoria=categoria, conta=self.conta,
         )
 
     def test_alerta_some_quando_o_estoque_se_recupera(self):
@@ -33,8 +38,7 @@ class NotificacaoObsoletaTests(TestCase):
 
         estoque = Estoque.objects.create(
             loja=self.loja, produto=self.produto,
-            quantidade_atual=1, quantidade_minima=5,
-        )
+            quantidade_atual=1, quantidade_minima=5, quantidade_maxima=999,)
         notificar_estoque_baixo(estoque)
         self.assertTrue(
             Notificacao.objects.filter(tipo='estoque_baixo', estoque=estoque).exists()

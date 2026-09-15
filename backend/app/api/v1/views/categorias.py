@@ -1,10 +1,10 @@
 from rest_framework import viewsets
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 
-from app.models import Categoria, Loja
-from app.permissions import IsGerenteOrAdministrador, is_admin, is_gerente
+from app.models import Categoria
+from app.permissions import IsGerenteOrAdministrador, escopar_por_conta
 from ..serializers import CategoriaSerializer
+from .conta import conta_do_request
 
 
 class CategoriaViewSet(viewsets.ModelViewSet):
@@ -13,20 +13,9 @@ class CategoriaViewSet(viewsets.ModelViewSet):
     lookup_field = "public_id"
 
     def get_queryset(self):
-        user = self.request.user
-        queryset = Categoria.objects.all()
-
-        if is_admin(user):
-            return queryset
-        if is_gerente(user):
-            return queryset.filter(gerente=user)
-
-        # Responsavel: catalogo do gerente da propria loja, nao o de outra
-        # empresa. Sem loja/gerente atribuido, nao ve nenhuma categoria.
-        loja = Loja.objects.filter(responsavel=user).first()
-        if not loja or not loja.gerente_id:
-            return queryset.none()
-        return queryset.filter(gerente_id=loja.gerente_id)
+        # O Responsavel nao precisa mais achar o dono do catalogo dando a
+        # volta pela propria loja: ele e membro da conta como qualquer outro.
+        return escopar_por_conta(Categoria.objects.all(), self.request.user)
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
@@ -34,20 +23,17 @@ class CategoriaViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsGerenteOrAdministrador()]
 
+    def get_serializer_context(self):
+        """Entrega a conta ao serializer para ele checar nome duplicado.
+
+        So na criacao: na edicao a conta certa e a que a linha ja tem, e
+        pedir a do request faria o Admin (que nao tem conta) comparar contra
+        nada.
+        """
+        context = super().get_serializer_context()
+        if self.request and self.action == "create":
+            context["conta"] = conta_do_request(self.request)
+        return context
+
     def perform_create(self, serializer):
-        user = self.request.user
-        if "gerente" in self.request.data and not is_admin(user):
-            raise PermissionDenied("Apenas admin pode definir o gerente da categoria.")
-
-        if is_gerente(user) and not is_admin(user) and "gerente" not in self.request.data:
-            serializer.save(gerente=user)
-            return
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        if "gerente" in self.request.data:
-            raise PermissionDenied(
-                "O gerente da categoria e definido na criacao e nao pode ser alterado."
-            )
-        serializer.save()
+        serializer.save(conta=self.get_serializer_context()["conta"])

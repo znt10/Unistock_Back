@@ -4,9 +4,15 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 
 from app.models import Loja
+from app.tests.fabricas import criar_conta
 
 
 class ConverterResponsaveisTests(TestCase):
+    def setUp(self):
+        # Loja exige empresa desde a camada de Conta; qual delas e irrelevante
+        # aqui, o assunto do arquivo e a conversao do login.
+        self.conta = criar_conta("Empresa da Migracao")
+
     def test_converte_login_para_o_email_da_loja(self):
         from app.migracoes_loja_login import converter_responsaveis
 
@@ -14,6 +20,7 @@ class ConverterResponsaveisTests(TestCase):
             username='joao@gmail.com', email='joao@gmail.com', password='123',
         )
         loja = Loja.objects.create(
+        conta=self.conta,
             nome_loja='Lapa', cidade='Patos', endereco='Rua 1',
             email='lapa@unistock.com', responsavel=pessoa,
         )
@@ -32,6 +39,7 @@ class ConverterResponsaveisTests(TestCase):
 
         pessoa = User.objects.create_user(username='maria@gmail.com', password='123')
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Sem Email', cidade='Patos', endereco='Rua 2',
             responsavel=pessoa,
         )
@@ -49,6 +57,7 @@ class ConverterResponsaveisTests(TestCase):
         User.objects.create_user(username='lapa@unistock.com', password='123')
         pessoa = User.objects.create_user(username='pedro@gmail.com', password='123')
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Lapa', cidade='Patos', endereco='Rua 1',
             email='lapa@unistock.com', responsavel=pessoa,
         )
@@ -64,6 +73,7 @@ class ConverterResponsaveisTests(TestCase):
         from app.migracoes_loja_login import converter_responsaveis
 
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Vazia', cidade='Patos', endereco='Rua 3',
             email='vazia@unistock.com',
         )
@@ -86,10 +96,12 @@ class ConverterResponsaveisTests(TestCase):
         um = User.objects.create_user(username='um@gmail.com', password='123')
         dois = User.objects.create_user(username='dois@gmail.com', password='123')
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Primeira', cidade='Patos', endereco='Rua 1',
             email='mesma@unistock.com', responsavel=um,
         )
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Segunda', cidade='Patos', endereco='Rua 2',
             email='mesma@unistock.com', responsavel=dois,
         )
@@ -114,10 +126,12 @@ class ConverterResponsaveisTests(TestCase):
 
         pessoa = User.objects.create_user(username='ana@gmail.com', password='123')
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Loja A', cidade='Patos', endereco='Rua 1',
             email='a@unistock.com', responsavel=pessoa,
         )
         Loja.objects.create(
+        conta=self.conta,
             nome_loja='Loja B', cidade='Patos', endereco='Rua 2',
             email='b@unistock.com', responsavel=pessoa,
         )

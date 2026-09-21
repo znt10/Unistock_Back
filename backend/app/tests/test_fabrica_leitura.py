@@ -472,3 +472,48 @@ class CancelarDepoisDeDesfazerTests(CenarioDeLeitura):
         self.assertEqual(self.pedido.status, Pedido.Status.CANCELADO)
         leitura_y = LeituraCaixa.objects.get(public_id=leitura_y_aberta)
         self.assertIsNone(leitura_y.caixa_fechada)
+
+
+class DetalheEACaminhoTests(CenarioDeLeitura):
+    def test_detalhe_mostra_a_caixa_sem_mudar_nada(self):
+        resposta = self.client.get(f"/api/v1/caixas/{self.caixa2.codigo}/")
+
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.assertEqual(resposta.data["situacao"], "A_CAMINHO")
+        self.assertEqual(resposta.data["proximo"], "CHEGOU")
+        self.assertEqual((resposta.data["numero"], resposta.data["total"]), (2, 2))
+        self.assertEqual(resposta.data["produto_nome"], "Coxinha")
+        self.assertFalse(LeituraCaixa.objects.exists())
+        self.assertEqual(self.estoque_da(self.fabrica), 5)
+
+    def test_detalhe_de_outra_loja_e_recusado(self):
+        self.client.force_authenticate(self.moema.responsavel)
+        resposta = self.client.get(f"/api/v1/caixas/{self.caixa1.codigo}/")
+        self.assertEqual(resposta.status_code, 403)
+        self.assertEqual(resposta.data["error"], "Essa caixa é da Lapa.")
+
+    def test_a_caminho_lista_o_que_falta_da_propria_loja(self):
+        self.imprimir(1, loja=self.moema)
+        self.ler(self.caixa1)
+
+        resposta = self.client.get("/api/v1/caixas/a-caminho/")
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(len(resposta.data), 1)
+        linha = resposta.data[0]
+        self.assertEqual(linha["pedido"], str(self.pedido.public_id))
+        self.assertEqual(linha["produto_nome"], "Coxinha")
+        self.assertEqual((linha["caixas_chegaram"], linha["caixas_total"]), (1, 2))
+        self.assertEqual(linha["faltam"], [2])
+
+    def test_a_caminho_some_quando_tudo_chegou(self):
+        self.ler(self.caixa1)
+        self.ler(self.caixa2)
+        self.assertEqual(self.client.get("/api/v1/caixas/a-caminho/").data, [])
+
+    def test_a_caminho_so_para_login_de_loja(self):
+        gerente = criar_gerente("gerente@x.com", self.conta)
+        self.client.force_authenticate(gerente)
+        resposta = self.client.get("/api/v1/caixas/a-caminho/")
+        self.assertEqual(resposta.status_code, 403)
+        self.assertEqual(resposta.data["error"], "Só o acesso de uma loja lê caixas.")

@@ -454,3 +454,33 @@ def desfazer_leitura(leitura_id, usuario):
             "caixa": descrever_caixa(caixa, pedido),
             "caixa_reaberta": descrever_caixa(reaberta, reaberta.pedido) if reaberta else None,
         }
+
+
+def detalhe_da_caixa(codigo, usuario):
+    """A caixa para a pagina do link. Nao muda nada — ler e so por POST."""
+    caixa = _caixa_por_codigo(codigo)
+    pedido = Pedido.objects.select_related("loja").get(pk=caixa.pedido_id)
+    _conferir_loja(pedido, usuario)
+    return descrever_caixa(caixa, pedido)
+
+
+def a_caminho(loja):
+    """Pedidos da fabrica em entrega para esta loja, com as caixas que faltam."""
+    pedidos = (
+        Pedido.objects.filter(loja=loja, status=Pedido.Status.EM_ENTREGA, da_fabrica=True)
+        .prefetch_related("caixas", "itens__produto")
+        .order_by("created_at", "id")
+    )
+    resultado = []
+    for pedido in pedidos:
+        caixas = sorted(pedido.caixas.all(), key=lambda caixa: caixa.numero)
+        itens = list(pedido.itens.all())
+        resultado.append({
+            "pedido": str(pedido.public_id),
+            "pedido_numero": pedido.id,
+            "produto_nome": itens[0].produto.nome_produto if itens else "",
+            "caixas_total": len(caixas),
+            "caixas_chegaram": sum(1 for caixa in caixas if caixa.situacao != S.A_CAMINHO),
+            "faltam": [caixa.numero for caixa in caixas if caixa.situacao == S.A_CAMINHO],
+        })
+    return resultado

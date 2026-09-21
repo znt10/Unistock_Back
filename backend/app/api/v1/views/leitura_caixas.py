@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from app.services.leitura_caixas import LeituraRecusada, ler_caixa
+from app.services.leitura_caixas import LeituraRecusada, desfazer_leitura, ler_caixa
 
 
 def responder_recusa(erro):
@@ -28,5 +28,17 @@ class LerCaixaView(APIView):
         confirmar = request.data.get("confirmar") is True
         try:
             return Response(ler_caixa(codigo, request.user, confirmar=confirmar))
+        except LeituraRecusada as erro:
+            return responder_recusa(erro)
+
+
+class DesfazerLeituraView(APIView):
+    """POST /api/v1/leituras/<id>/desfazer/ — volta o que a leitura fez."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, leitura_id):
+        try:
+            return Response(desfazer_leitura(leitura_id, request.user))
         except LeituraRecusada as erro:
             return responder_recusa(erro)

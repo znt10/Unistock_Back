@@ -65,6 +65,23 @@ class LojaZerada(LeituraRecusada):
     codigo = "loja_zerada"
 
 
+class LeituraNaoEncontrada(LeituraRecusada):
+    status = 404
+    codigo = "leitura_nao_encontrada"
+
+
+class LeituraJaDesfeita(LeituraRecusada):
+    codigo = "ja_desfeita"
+
+
+class CaixaLidaDeNovo(LeituraRecusada):
+    codigo = "lida_de_novo"
+
+
+class PrazoDeDesfazerPassou(LeituraRecusada):
+    codigo = "prazo"
+
+
 def loja_do_leitor(usuario):
     """A loja comum de que este usuario e o acesso, ou None.
 
@@ -332,4 +349,97 @@ def ler_caixa(codigo, usuario, confirmar=False):
             "caixa_fechada": (
                 descrever_caixa(caixa_fechada, caixa_fechada.pedido) if caixa_fechada else None
             ),
+        }
+
+
+def _repor_na_loja(loja, produto, usuario):
+    """Loja +1 com ENTRADA (volta de um ACABOU)."""
+    linha = _estoques_travados(produto, [loja]).get(loja.id) or _linha_da_loja(loja, produto)
+    _somar(linha, 1, usuario)
+    MovimentacaoEstoque.objects.create(
+        tipo=MovimentacaoEstoque.Tipo.ENTRADA,
+        produto=produto, loja_destino=loja, quantidade=1, usuario=usuario,
+    )
+
+
+def _devolver_para_fabrica(pedido, produto, usuario):
+    """Loja -1, fabrica +1, TRANSFERENCIA no sentido contrario da chegada."""
+    fabrica = fabrica_da_conta(pedido.loja.conta_id)
+    if fabrica is None:
+        raise FabricaSemEstoque("A empresa não tem fábrica ativa. Avise a gerência.")
+    linhas = _estoques_travados(produto, [fabrica, pedido.loja])
+    linha_loja = linhas.get(pedido.loja_id)
+    if linha_loja is None or linha_loja.quantidade_atual < 1:
+        raise LojaZerada("O estoque da loja já está zerado para esse produto. Avise a gerência.")
+
+    linha_fabrica = linhas.get(fabrica.id) or _linha_da_loja(fabrica, produto)
+    _somar(linha_loja, -1, usuario)
+    _somar(linha_fabrica, 1, usuario)
+    MovimentacaoEstoque.objects.create(
+        tipo=MovimentacaoEstoque.Tipo.TRANSFERENCIA,
+        produto=produto, loja_origem=pedido.loja, loja_destino=fabrica,
+        quantidade=1, usuario=usuario,
+    )
+
+
+def desfazer_leitura(leitura_id, usuario):
+    """Volta exatamente o que uma leitura fez. Nada e apagado.
+
+    Ordem de trava: caixa (e a caixa_fechada junto, se houver) -> pedido ->
+    Estoque. A leitura em si e lida sem trava — so o public_id (uuid), sem
+    concorrencia real em cima dela — e relida depois das travas para pegar um
+    desfazer concorrente.
+    """
+    with transaction.atomic():
+        leitura = LeituraCaixa.objects.filter(public_id=leitura_id).first()
+        if leitura is None:
+            raise LeituraNaoEncontrada("Leitura não encontrada.")
+
+        ids_para_travar = {leitura.caixa_id}
+        if leitura.caixa_fechada_id:
+            ids_para_travar.add(leitura.caixa_fechada_id)
+        travadas = _travar_caixas(ids_para_travar)
+        caixa = travadas[leitura.caixa_id]
+
+        pedido = _pedido_travado(caixa)
+        _conferir_loja(pedido, usuario)
+        # Relida depois das travas: outra requisicao pode ter desfeito antes.
+        leitura.refresh_from_db()
+
+        if leitura.desfeita_em is not None:
+            raise LeituraJaDesfeita("Essa leitura já foi desfeita.")
+        if _ultima_leitura_valida(caixa).pk != leitura.pk:
+            raise CaixaLidaDeNovo("Essa caixa já foi lida de novo.")
+        agora = timezone.now()
+        if agora - leitura.created_at > PRAZO_PARA_DESFAZER:
+            raise PrazoDeDesfazerPassou("Passou o prazo para desfazer essa leitura.")
+
+        produto = _produto(pedido)
+        if leitura.passo == S.CHEGOU:
+            _devolver_para_fabrica(pedido, produto, usuario)
+            if pedido.status == Pedido.Status.ENTREGUE:
+                pedido.status = Pedido.Status.EM_ENTREGA
+                pedido.save(update_fields=["status", "updated_at"])
+        elif leitura.passo == S.ACABOU:
+            _repor_na_loja(pedido.loja, produto, usuario)
+
+        reaberta = None
+        if leitura.caixa_fechada_id:
+            reaberta = travadas[leitura.caixa_fechada_id]
+            _repor_na_loja(pedido.loja, produto, usuario)
+            reaberta.situacao = S.ABERTA
+            reaberta.acabou_em = None
+            reaberta.save(update_fields=["situacao", "acabou_em", "updated_at"])
+
+        campo = CAMPO_DA_DATA[leitura.passo]
+        caixa.situacao = PASSO_ANTERIOR[leitura.passo]
+        setattr(caixa, campo, None)
+        caixa.save(update_fields=["situacao", campo, "updated_at"])
+
+        leitura.desfeita_em = agora
+        leitura.save(update_fields=["desfeita_em", "updated_at"])
+
+        return {
+            "caixa": descrever_caixa(caixa, pedido),
+            "caixa_reaberta": descrever_caixa(reaberta, reaberta.pedido) if reaberta else None,
         }

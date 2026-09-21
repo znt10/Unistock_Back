@@ -9,6 +9,7 @@ from .views.fabrica import (
     FabricaEtiquetasView,
     FabricaProducaoView,
 )
+from .views.leitura_caixas import LerCaixaView
 
 router = DefaultRouter()
 router.register(r'pedidos', PedidoViewSet)
@@ -35,4 +36,5 @@ urlpatterns = router.urls + [
     path('fabrica/etiquetas/', FabricaEtiquetasView.as_view(), name='fabrica-etiquetas'),
     path('fabrica/producao/', FabricaProducaoView.as_view(), name='fabrica-producao'),
     path('fabrica/disponivel/', FabricaDisponivelView.as_view(), name='fabrica-disponivel'),
+    path('caixas/<str:codigo>/ler/', LerCaixaView.as_view(), name='caixa-ler'),
 ]

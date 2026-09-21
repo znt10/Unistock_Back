@@ -1,4 +1,5 @@
 from rest_framework.authentication import BaseAuthentication, get_authorization_header
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth import get_user_model
 
@@ -17,15 +18,21 @@ class CookieJWTAuthentication(BaseAuthentication):
         if not token:
             return None
 
+        # So os casos esperados viram usuario anonimo (token invalido/expirado,
+        # usuario apagado). Qualquer outro erro sobe: antes um `except
+        # Exception` fazia bug interno ou banco fora parecer "nao logado".
         try:
             access_token = AccessToken(token)
-
-            user_id = access_token.get('user_id')
-            if not user_id:
-                return None
-
-            User = get_user_model()
-            user = User.objects.get(id=user_id)
-            return (user, None)
-        except Exception:
+        except TokenError:
             return None
+
+        user_id = access_token.get('user_id')
+        if not user_id:
+            return None
+
+        User = get_user_model()
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return None
+        return (user, None)

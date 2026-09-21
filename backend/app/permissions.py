@@ -156,6 +156,20 @@ class IsGerenteOrAdministrador(BasePermission):
         return is_gerente_ou_admin(request.user)
 
 
+def _loja_do_objeto(obj):
+    """A loja a que o objeto pertence, ou None.
+
+    ItemPedido nao tem FK de loja: a loja dele e a do pedido. Sem isso o
+    gerente recebia 403 ao editar ou excluir qualquer item.
+    """
+    if isinstance(obj, Loja):
+        return obj
+    if hasattr(obj, "loja"):
+        return obj.loja
+    pedido = getattr(obj, "pedido", None)
+    return pedido.loja if pedido is not None else None
+
+
 class IsGerenteOrAdministradorOrResponsavel(BasePermission):
     """NAO e a regra acima com um grupo a mais — e outra regra.
 
@@ -192,7 +206,7 @@ class IsGerenteOrAdministradorOrResponsavel(BasePermission):
             return False
 
         if is_gerente(user):
-            loja = obj if isinstance(obj, Loja) else getattr(obj, "loja", None)
+            loja = _loja_do_objeto(obj)
             return loja is not None and loja.conta_id == conta.id
 
         if is_responsavel(user):

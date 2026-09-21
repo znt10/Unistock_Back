@@ -23,7 +23,9 @@ class LerCaixaView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, codigo):
-        confirmar = bool(request.data.get("confirmar", False))
+        # So aceita confirmacao explicita (JSON true); qualquer outra coisa
+        # (string "false", numero, ausente) conta como nao confirmado.
+        confirmar = request.data.get("confirmar") is True
         try:
             return Response(ler_caixa(codigo, request.user, confirmar=confirmar))
         except LeituraRecusada as erro:

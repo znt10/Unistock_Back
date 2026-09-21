@@ -207,6 +207,8 @@ class LerCaixaTests(CenarioDeLeitura):
         self.caixa1.refresh_from_db()
         self.assertEqual(self.caixa1.situacao, Caixa.Situacao.A_CAMINHO)
         self.assertFalse(LeituraCaixa.objects.exists())
+        self.assertIsNone(self.estoque_da(self.lapa))
+        self.assertFalse(MovimentacaoEstoque.objects.exists())
 
     def test_loja_zerada_a_mao_recusa_o_acabou(self):
         self.ler(self.caixa1)
@@ -221,3 +223,47 @@ class LerCaixaTests(CenarioDeLeitura):
         self.assertEqual(resposta.data["codigo"], "loja_zerada")
         self.caixa1.refresh_from_db()
         self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ABERTA)
+
+    def test_fechar_a_antiga_com_loja_zerada_recusa_e_nao_muda_nenhuma_caixa(self):
+        """O fechamento automatico (ao abrir outra) tambem respeita a loja zerada.
+
+        A leitura inteira roda numa transacao so: se a baixa da caixa antiga
+        falha, nem ela nem a nova caixa mudam de situacao.
+        """
+        self.ler(self.caixa1)
+        self.ler(self.caixa2)
+        self.passar_tempo(3)
+        self.ler(self.caixa1)
+        self.passar_tempo(3)
+        Estoque.objects.filter(loja=self.lapa, produto=self.coxinha).update(quantidade_atual=0)
+        antes = LeituraCaixa.objects.count()
+
+        resposta = self.ler(self.caixa2, confirmar=True)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["codigo"], "loja_zerada")
+        self.caixa1.refresh_from_db()
+        self.caixa2.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ABERTA)
+        self.assertEqual(self.caixa2.situacao, Caixa.Situacao.CHEGOU)
+        self.assertEqual(self.estoque_da(self.lapa), 0)
+        self.assertEqual(LeituraCaixa.objects.count(), antes)
+
+    def test_caixa_aberta_de_outra_loja_nao_e_fechada(self):
+        """So fecha a antiga da mesma loja — outra loja com o mesmo produto
+        aberto fica intacta."""
+        pedido_moema = self.imprimir(1, loja=self.moema)
+        caixa_moema = pedido_moema.caixas.get()
+        self.ler(caixa_moema, usuario=self.moema.responsavel)
+        self.passar_tempo(3)
+        self.ler(caixa_moema, usuario=self.moema.responsavel)
+        self.passar_tempo(3)
+
+        self.ler(self.caixa1, usuario=self.lapa.responsavel)
+        self.passar_tempo(3)
+        resposta = self.ler(self.caixa1, usuario=self.lapa.responsavel)
+
+        self.assertEqual(resposta.data["caixa"]["situacao"], "ABERTA")
+        self.assertIsNone(resposta.data["caixa_fechada"])
+        caixa_moema.refresh_from_db()
+        self.assertEqual(caixa_moema.situacao, Caixa.Situacao.ABERTA)

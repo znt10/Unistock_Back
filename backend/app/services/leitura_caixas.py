@@ -82,15 +82,54 @@ def _conferir_loja(pedido, usuario):
         raise CaixaDeOutraLoja(f"Essa caixa é da {pedido.loja.nome_loja}.")
 
 
-def _caixa_travada(**filtro):
-    caixa = Caixa.objects.select_for_update().filter(**filtro).first()
+def _caixa_por_codigo(codigo):
+    """Leitura sem trava, so para achar a caixa (e, se for o caso, quem travar
+    junto com ela — ver _travar_caixas). A decisao de verdade usa sempre as
+    linhas devolvidas por _travar_caixas, nunca esta.
+    """
+    caixa = Caixa.objects.filter(codigo=codigo).first()
     if caixa is None:
         raise CaixaNaoEncontrada("Caixa não encontrada ou pedido cancelado.")
     return caixa
 
 
+def _travar_caixas(ids):
+    """Trava estas caixas juntas, numa unica select_for_update por id.
+
+    `of=("self",)` evita travar Pedido/ItemPedido: quem chama so quer as
+    linhas de Caixa, e o join de _candidata_a_fechar nao pode travar o pedido
+    antes da hora (ver o docstring do modulo e o comentario em ler_caixa).
+    """
+    return {
+        c.pk: c
+        for c in Caixa.objects.select_for_update(of=("self",)).filter(pk__in=ids).order_by("id")
+    }
+
+
+def _candidata_a_fechar(caixa, pedido, produto):
+    """Outra caixa ABERTA do mesmo produto, na mesma loja — leitura sem trava.
+
+    So descobre quem e a candidata para travar junto (ver _travar_caixas); a
+    decisao de fechar ou nao usa a linha ja travada, em _abrir.
+    """
+    return (
+        Caixa.objects.filter(
+            situacao=S.ABERTA,
+            pedido__loja=pedido.loja,
+            pedido__itens__produto=produto,
+        )
+        .exclude(pk=caixa.pk)
+        .order_by("aberta_em", "id")
+        .first()
+    )
+
+
 def _pedido_travado(caixa):
-    return Pedido.objects.select_for_update().select_related("loja").get(pk=caixa.pedido_id)
+    return (
+        Pedido.objects.select_for_update(of=("self",))
+        .select_related("loja")
+        .get(pk=caixa.pedido_id)
+    )
 
 
 def _produto(pedido):
@@ -99,13 +138,13 @@ def _produto(pedido):
 
 
 def _ultima_leitura_valida(caixa):
-    return caixa.leituras.filter(desfeita_em__isnull=True).order_by("-id").first()
+    return caixa.leituras.filter(desfeita_em__isnull=True).order_by("-created_at", "-id").first()
 
 
 def _estoques_travados(produto, lojas):
     """Linhas de Estoque deste produto nestas lojas, travadas por id."""
     linhas = (
-        Estoque.objects.select_for_update()
+        Estoque.objects.select_for_update(of=("self",))
         .filter(produto=produto, loja__in=[loja for loja in lojas if loja])
         .order_by("id")
     )
@@ -168,30 +207,22 @@ def _chegar(pedido, produto, usuario):
     )
 
 
-def _abrir(caixa, pedido, produto, usuario, agora):
-    """Abre esta caixa; se outra do mesmo produto estava aberta, fecha a antiga.
+def _abrir(pedido, produto, usuario, agora, candidata):
+    """Abre esta caixa; se a candidata (ja travada por _travar_caixas) ainda
+    estiver ABERTA, fecha a antiga. Devolve a caixa fechada (ou None).
 
-    Devolve a caixa fechada (ou None).
+    A candidata foi achada por uma leitura sem trava (_candidata_a_fechar) e
+    pode ter mudado entre aquela leitura e a trava — por isso so fecha se,
+    ja travada, ainda estiver ABERTA.
     """
-    outra = (
-        Caixa.objects.select_for_update()
-        .filter(
-            situacao=S.ABERTA,
-            pedido__loja=pedido.loja,
-            pedido__itens__produto=produto,
-        )
-        .exclude(pk=caixa.pk)
-        .order_by("aberta_em", "id")
-        .first()
-    )
-    if outra is None:
+    if candidata is None or candidata.situacao != S.ABERTA:
         return None
 
     _baixar_na_loja(pedido.loja, produto, usuario)
-    outra.situacao = S.ACABOU
-    outra.acabou_em = agora
-    outra.save(update_fields=["situacao", "acabou_em", "updated_at"])
-    return outra
+    candidata.situacao = S.ACABOU
+    candidata.acabou_em = agora
+    candidata.save(update_fields=["situacao", "acabou_em", "updated_at"])
+    return candidata
 
 
 def descrever_caixa(caixa, pedido):
@@ -213,9 +244,42 @@ def descrever_caixa(caixa, pedido):
 
 
 def ler_caixa(codigo, usuario, confirmar=False):
-    """Aplica o proximo passo da caixa. Ver o docstring do modulo."""
+    """Aplica o proximo passo da caixa. Ver o docstring do modulo.
+
+    A ordem de trava (caixa -> pedido -> Estoque) tem uma dobra: quando a
+    leitura vai abrir a caixa (CHEGOU -> ABERTA), a caixa que pode fechar
+    junto (mesmo produto, mesma loja, ainda ABERTA) tambem e uma Caixa —
+    entao as duas travam juntas, numa unica select_for_update por id, antes
+    do pedido. Quem ela e, descobrimos com uma leitura sem trava primeiro
+    (_candidata_a_fechar); a decisao real usa a linha ja travada.
+    """
     with transaction.atomic():
-        caixa = _caixa_travada(codigo=codigo)
+        pre_caixa = _caixa_por_codigo(codigo)
+        pre_pedido = Pedido.objects.select_related("loja").get(pk=pre_caixa.pedido_id)
+
+        ids_para_travar = {pre_caixa.pk}
+        if pre_caixa.situacao == S.CHEGOU:
+            produto_pre = _produto(pre_pedido)
+            candidata_pre = _candidata_a_fechar(pre_caixa, pre_pedido, produto_pre)
+            if candidata_pre:
+                ids_para_travar.add(candidata_pre.pk)
+
+        travadas = _travar_caixas(ids_para_travar)
+        caixa = travadas[pre_caixa.pk]
+
+        if caixa.situacao == S.CHEGOU and len(travadas) == 1:
+            # Raro: a caixa estava A_CAMINHO na leitura sem trava (chegou
+            # entre uma leitura e a outra) e virou CHEGOU so agora, entao a
+            # candidata nao entrou na trava acima. Trava so ela agora —
+            # excecao aceita a ordem (caixa depois de caixa, mas as duas
+            # antes do pedido, entao a regra caixa->pedido->estoque continua
+            # valendo).
+            produto_pre = _produto(pre_pedido)
+            candidata_pre = _candidata_a_fechar(caixa, pre_pedido, produto_pre)
+            if candidata_pre:
+                travadas = _travar_caixas({caixa.pk, candidata_pre.pk})
+                caixa = travadas[caixa.pk]
+
         pedido = _pedido_travado(caixa)
         _conferir_loja(pedido, usuario)
 
@@ -241,7 +305,8 @@ def ler_caixa(codigo, usuario, confirmar=False):
         if proximo == S.CHEGOU:
             _chegar(pedido, produto, usuario)
         elif proximo == S.ABERTA:
-            caixa_fechada = _abrir(caixa, pedido, produto, usuario, agora)
+            candidata = next((c for pk, c in travadas.items() if pk != caixa.pk), None)
+            caixa_fechada = _abrir(pedido, produto, usuario, agora, candidata)
         else:
             _baixar_na_loja(pedido.loja, produto, usuario)
 

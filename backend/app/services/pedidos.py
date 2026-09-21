@@ -135,6 +135,13 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
             # entao toda LeituraCaixa destas caixas ja foi desfeita — apaga
             # antes para o PROTECT da FK nao barrar o delete das caixas.
             LeituraCaixa.objects.filter(caixa__pedido=pedido).delete()
+            # Uma leitura de OUTRO pedido pode ter fechado uma caixa deste
+            # pedido junto (caixa_fechada, tambem PROTECT); essas leituras
+            # ja foram desfeitas por construcao (senao a caixa fechada nao
+            # estaria A_CAMINHO e o cancelamento acima ja teria sido
+            # recusado). Nao apaga: e historico do outro pedido, so solta a
+            # referencia.
+            LeituraCaixa.objects.filter(caixa_fechada__pedido=pedido).update(caixa_fechada=None)
             pedido.caixas.all().delete()
 
         if status_novo == Pedido.Status.ENTREGUE:

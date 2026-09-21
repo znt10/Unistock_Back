@@ -335,6 +335,42 @@ class DesfazerLeituraTests(CenarioDeLeitura):
         self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ABERTA)
         self.assertIsNone(self.caixa1.acabou_em)
         self.assertEqual(self.estoque_da(self.lapa), 2)
+        self.assertTrue(MovimentacaoEstoque.objects.filter(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA, loja_destino=self.lapa
+        ).exists())
+
+    def test_nao_desfaz_aberta_se_a_caixa_foi_fechada_junto_com_outra_depois(self):
+        """A leitura que abriu X1 nao aparece na LeituraCaixa de Y1 (que a
+        fechou via caixa_fechada, related_name "+"), entao so o check de
+        _ultima_leitura_valida(caixa) nao pega este caso: e preciso conferir
+        tambem que a caixa ainda esta na situacao que esta leitura deixou."""
+        self.ler(self.caixa1)
+        leitura_abriu_x1 = self.ler(self.caixa1, confirmar=True).data["leitura"]
+        self.ler(self.caixa2)
+        self.ler(self.caixa2, confirmar=True)
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ACABOU)
+
+        resposta = self.desfazer(leitura_abriu_x1)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["codigo"], "lida_de_novo")
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ACABOU)
+        self.assertEqual(self.estoque_da(self.lapa), 1)
+
+    def test_desfazer_chegou_com_loja_zerada_recusa_e_nao_muda_nada(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+        Estoque.objects.filter(loja=self.lapa, produto=self.coxinha).update(quantidade_atual=0)
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["codigo"], "loja_zerada")
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.CHEGOU)
+        self.assertEqual(self.estoque_da(self.fabrica), 4)
+        self.assertEqual(self.estoque_da(self.lapa), 0)
 
     def test_so_desfaz_a_ultima_leitura_da_caixa(self):
         primeira = self.ler(self.caixa1).data["leitura"]
@@ -399,3 +435,40 @@ class CancelarDepoisDeDesfazerTests(CenarioDeLeitura):
         self.assertEqual(self.pedido.status, Pedido.Status.CANCELADO)
         self.assertFalse(Caixa.objects.filter(pedido=self.pedido).exists())
         self.assertFalse(LeituraCaixa.objects.filter(caixa__pedido=self.pedido).exists())
+
+    def test_leitura_que_fechou_caixa_de_outro_pedido_solta_a_referencia_ao_cancelar(self):
+        """Y1 (de outro pedido, mesma loja/produto) abre e fecha X1 junto.
+        Depois de desfazer tudo de X ate ela ficar toda A_CAMINHO, cancelar X
+        nao pode apagar a leitura de Y1 — e historico de outro pedido — so
+        soltar a referencia a caixa_fechada (que agora aponta pra uma caixa
+        que vai deixar de existir)."""
+        leitura_x1_chegou = self.ler(self.caixa1).data["leitura"]
+        leitura_x1_aberta = self.ler(self.caixa1, confirmar=True).data["leitura"]
+
+        pedido_y = self.imprimir(1)
+        caixa_y = pedido_y.caixas.get()
+        self.ler(caixa_y)
+        leitura_y_aberta = self.ler(caixa_y, confirmar=True).data["leitura"]
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ACABOU)
+
+        self.assertEqual(self.desfazer(leitura_y_aberta).status_code, 200)
+        self.assertEqual(self.desfazer(leitura_x1_aberta).status_code, 200)
+        resposta_undo_chegou = self.desfazer(leitura_x1_chegou)
+        self.assertEqual(resposta_undo_chegou.status_code, 200, resposta_undo_chegou.data)
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.A_CAMINHO)
+
+        gerente = criar_gerente("gerente@x.com", self.conta)
+        self.client.force_authenticate(gerente)
+        resposta = self.client.patch(
+            f"/api/v1/pedidos/{self.pedido.public_id}/status/",
+            {"status": "CANCELADO"},
+            format="json",
+        )
+
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, Pedido.Status.CANCELADO)
+        leitura_y = LeituraCaixa.objects.get(public_id=leitura_y_aberta)
+        self.assertIsNone(leitura_y.caixa_fechada)

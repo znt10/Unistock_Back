@@ -264,6 +264,32 @@ class Caixa(BaseModel):
         return f"Caixa {self.numero} do pedido {self.pedido_id}"
 
 
+class LeituraCaixa(BaseModel):
+    """Uma leitura do QR de uma caixa na loja — o que ela fez, para poder desfazer.
+
+    O passo e o que a leitura aplicou (CHEGOU, ABERTA ou ACABOU). caixa_fechada
+    e a outra caixa do mesmo produto que esta leitura marcou como ACABOU ao
+    abrir esta: sem esse registro o desfazer nao saberia que as duas mudancas
+    foram uma leitura so.
+
+    Leitura desfeita nao e apagada: ganha desfeita_em, e o historico continua.
+    """
+
+    caixa = models.ForeignKey(Caixa, on_delete=models.PROTECT, related_name="leituras")
+    passo = models.CharField(max_length=10, choices=Caixa.Situacao.choices)
+    usuario = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="leituras_de_caixa",
+    )
+    caixa_fechada = models.ForeignKey(
+        Caixa, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    desfeita_em = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.passo} da caixa {self.caixa_id}"
+
+
 class EstoqueQuerySet(models.QuerySet):
     def excedidos(self):
         """Itens ACIMA do teto, em lojas ativas — o espelho de baixos().

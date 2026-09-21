@@ -15,7 +15,7 @@ delas.
 
 from django.db import transaction
 
-from app.models import Caixa, Estoque, MovimentacaoEstoque, Pedido
+from app.models import Caixa, Estoque, LeituraCaixa, MovimentacaoEstoque, Pedido
 from app.notifications import (
     notificar_estoque_baixo,
     notificar_estoques_baixos_do_pedido,
@@ -106,6 +106,19 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
     precisa ser seguro de fazer.
     """
     with transaction.atomic():
+        # Trava as caixas antes do pedido, mesma ordem de leitura_caixas.py
+        # (caixa -> pedido -> Estoque): la, ler_caixa trava a Caixa primeiro
+        # e so depois o Pedido. Aqui embaixo o cancelamento apaga as Caixa
+        # deste pedido (pedido.caixas.all().delete()), entao travar o Pedido
+        # primeiro e so depois a Caixa (no delete) inverteria a ordem e podia
+        # dar deadlock (MySQL erro 1213) entre um cancelamento e uma leitura
+        # simultaneos. Pedido sem caixa (nao e da fabrica) so faz uma query
+        # vazia, custo desprezivel.
+        list(
+            Caixa.objects.select_for_update(of=("self",))
+            .filter(pedido_id=pedido_id)
+            .order_by("id")
+        )
         pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
         anterior = pedido.status
 
@@ -131,7 +144,17 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
         pedido.save(update_fields=['status', 'updated_at'])
 
         if anterior == Pedido.Status.EM_ENTREGA:
-            # Etiqueta de pedido cancelado nao pode continuar valendo.
+            # So cancela sem caixa lida (ver _conferir_cancelamento_em_entrega),
+            # entao toda LeituraCaixa destas caixas ja foi desfeita — apaga
+            # antes para o PROTECT da FK nao barrar o delete das caixas.
+            LeituraCaixa.objects.filter(caixa__pedido=pedido).delete()
+            # Uma leitura de OUTRO pedido pode ter fechado uma caixa deste
+            # pedido junto (caixa_fechada, tambem PROTECT); essas leituras
+            # ja foram desfeitas por construcao (senao a caixa fechada nao
+            # estaria A_CAMINHO e o cancelamento acima ja teria sido
+            # recusado). Nao apaga: e historico do outro pedido, so solta a
+            # referencia.
+            LeituraCaixa.objects.filter(caixa_fechada__pedido=pedido).update(caixa_fechada=None)
             pedido.caixas.all().delete()
 
         if status_novo == Pedido.Status.ENTREGUE:

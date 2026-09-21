@@ -1,21 +1,20 @@
 from rest_framework.exceptions import PermissionDenied
 
-
-class BaseMixin:
-    def is_admin(self, user):
-        return (
-            user.is_superuser
-            or user.groups.filter(name='Admin').exists()
-            or user.groups.filter(name='Gerente').exists()
-        )
+from app.permissions import is_gerente_ou_admin
 
 
-class ResponsavelOuAdminMixin(BaseMixin):
+class ResponsavelOuAdminMixin:
+    """Gerente/Admin agem em qualquer registro; os demais so no que e deles.
+
+    Usa is_gerente_ou_admin de permissions.py. Antes havia aqui um `is_admin`
+    proprio que contava o Gerente como admin — o mesmo nome do is_admin de
+    permissions.py, que exclui o Gerente de proposito.
+    """
 
     def get_queryset(self):
         user = self.request.user
 
-        if self.is_admin(user):
+        if is_gerente_ou_admin(user):
             return super().get_queryset()
 
         return super().get_queryset().filter(responsavel=user)
@@ -23,7 +22,7 @@ class ResponsavelOuAdminMixin(BaseMixin):
     def perform_update(self, serializer):
         user = self.request.user
 
-        if not self.is_admin(user):
+        if not is_gerente_ou_admin(user):
             if serializer.instance.responsavel != user:
                 raise PermissionDenied("Você só pode editar o que é seu")
 
@@ -32,29 +31,8 @@ class ResponsavelOuAdminMixin(BaseMixin):
     def perform_destroy(self, instance):
         user = self.request.user
 
-        if not self.is_admin(user):
+        if not is_gerente_ou_admin(user):
             if instance.responsavel != user:
                 raise PermissionDenied("Você só pode deletar o que é seu")
 
         instance.delete()
-
-class UserOuAdminMixin(BaseMixin):
-
-    def get_queryset(self):
-        user = self.request.user
-
-        if self.is_admin(user):
-            return super().get_queryset()
-
-        return super().get_queryset().filter(id=user.id)
-    
-    
-class ApenasAdminPodeCriarMixin(BaseMixin):
-
-    def perform_create(self, serializer):
-        user = self.request.user
-
-        if not self.is_admin(user):
-            raise PermissionDenied("Apenas gerente/admin pode criar")
-
-        serializer.save()

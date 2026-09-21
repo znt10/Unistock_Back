@@ -386,9 +386,9 @@ def desfazer_leitura(leitura_id, usuario):
     """Volta exatamente o que uma leitura fez. Nada e apagado.
 
     Ordem de trava: caixa (e a caixa_fechada junto, se houver) -> pedido ->
-    Estoque. A leitura em si e lida sem trava — so o public_id (uuid), sem
-    concorrencia real em cima dela — e relida depois das travas para pegar um
-    desfazer concorrente.
+    Estoque. A primeira leitura da LeituraCaixa e sem trava, so para achar o
+    id da caixa a travar; e segura porque e relida (refresh_from_db) depois
+    das travas, ja dentro do lock da caixa, antes de qualquer decisao.
     """
     with transaction.atomic():
         leitura = LeituraCaixa.objects.filter(public_id=leitura_id).first()
@@ -409,6 +409,17 @@ def desfazer_leitura(leitura_id, usuario):
         if leitura.desfeita_em is not None:
             raise LeituraJaDesfeita("Essa leitura já foi desfeita.")
         if _ultima_leitura_valida(caixa).pk != leitura.pk:
+            raise CaixaLidaDeNovo("Essa caixa já foi lida de novo.")
+        if caixa.situacao != leitura.passo:
+            # Caixa mudou de situacao sem passar por uma LeituraCaixa dela
+            # mesma — por exemplo, foi fechada junto quando outra caixa
+            # abriu (caixa_fechada, related_name "+", nao aparece em
+            # caixa.leituras, entao o check acima nao pega este caso).
+            raise CaixaLidaDeNovo("Essa caixa já foi lida de novo.")
+        if leitura.caixa_fechada_id and travadas[leitura.caixa_fechada_id].situacao != S.ACABOU:
+            # A caixa que esta leitura fechou junto ja mudou de novo (foi
+            # desfeita por outro caminho, por exemplo) — desfazer esta
+            # leitura reabriria algo que nao esta mais fechado por causa dela.
             raise CaixaLidaDeNovo("Essa caixa já foi lida de novo.")
         agora = timezone.now()
         if agora - leitura.created_at > PRAZO_PARA_DESFAZER:

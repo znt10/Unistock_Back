@@ -232,6 +232,11 @@ def _abrir(pedido, produto, usuario, agora, candidata):
     pode ter mudado entre aquela leitura e a trava — por isso so fecha se,
     ja travada, ainda estiver ABERTA.
     """
+    # Duas aberturas do mesmo produto ao mesmo tempo podem deixar duas caixas
+    # ABERTA: o segundo leitor trava depois que o primeiro ja fechou a caixa
+    # antiga e nao enxerga a caixa que o primeiro acabou de abrir (ela nao
+    # era a candidata quando a leitura sem trava rodou). Autocura sozinho na
+    # proxima abertura, que fecha a mais antiga das duas.
     if candidata is None or candidata.situacao != S.ABERTA:
         return None
 

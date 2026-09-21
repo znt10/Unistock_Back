@@ -106,6 +106,19 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
     precisa ser seguro de fazer.
     """
     with transaction.atomic():
+        # Trava as caixas antes do pedido, mesma ordem de leitura_caixas.py
+        # (caixa -> pedido -> Estoque): la, ler_caixa trava a Caixa primeiro
+        # e so depois o Pedido. Aqui embaixo o cancelamento apaga as Caixa
+        # deste pedido (pedido.caixas.all().delete()), entao travar o Pedido
+        # primeiro e so depois a Caixa (no delete) inverteria a ordem e podia
+        # dar deadlock (MySQL erro 1213) entre um cancelamento e uma leitura
+        # simultaneos. Pedido sem caixa (nao e da fabrica) so faz uma query
+        # vazia, custo desprezivel.
+        list(
+            Caixa.objects.select_for_update(of=("self",))
+            .filter(pedido_id=pedido_id)
+            .order_by("id")
+        )
         pedido = Pedido.objects.select_for_update().get(pk=pedido_id)
         anterior = pedido.status
 

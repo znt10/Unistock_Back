@@ -267,3 +267,135 @@ class LerCaixaTests(CenarioDeLeitura):
         self.assertIsNone(resposta.data["caixa_fechada"])
         caixa_moema.refresh_from_db()
         self.assertEqual(caixa_moema.situacao, Caixa.Situacao.ABERTA)
+
+
+class DesfazerLeituraTests(CenarioDeLeitura):
+    def test_desfazer_chegou_devolve_para_a_fabrica(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.assertEqual(resposta.data["caixa"]["situacao"], "A_CAMINHO")
+        self.assertEqual(self.estoque_da(self.fabrica), 5)
+        self.assertEqual(self.estoque_da(self.lapa), 0)
+        volta = MovimentacaoEstoque.objects.filter(
+            tipo=MovimentacaoEstoque.Tipo.TRANSFERENCIA, loja_origem=self.lapa
+        ).get()
+        self.assertEqual(volta.loja_destino, self.fabrica)
+        self.caixa1.refresh_from_db()
+        self.assertIsNone(self.caixa1.chegou_em)
+        self.assertIsNotNone(LeituraCaixa.objects.get(public_id=leitura).desfeita_em)
+
+    def test_desfazer_a_ultima_chegada_volta_o_pedido_para_em_entrega(self):
+        self.ler(self.caixa1)
+        leitura = self.ler(self.caixa2).data["leitura"]
+
+        self.desfazer(leitura)
+
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, Pedido.Status.EM_ENTREGA)
+
+    def test_desfazer_aberta_volta_para_chegou(self):
+        self.ler(self.caixa1)
+        leitura = self.ler(self.caixa1, confirmar=True).data["leitura"]
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.data["caixa"]["situacao"], "CHEGOU")
+        self.caixa1.refresh_from_db()
+        self.assertIsNone(self.caixa1.aberta_em)
+        self.assertEqual(self.estoque_da(self.lapa), 1)
+
+    def test_desfazer_acabou_repoe_na_loja_com_entrada(self):
+        self.ler(self.caixa1)
+        self.ler(self.caixa1, confirmar=True)
+        leitura = self.ler(self.caixa1, confirmar=True).data["leitura"]
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.data["caixa"]["situacao"], "ABERTA")
+        self.assertEqual(self.estoque_da(self.lapa), 1)
+        self.assertTrue(MovimentacaoEstoque.objects.filter(
+            tipo=MovimentacaoEstoque.Tipo.ENTRADA, loja_destino=self.lapa
+        ).exists())
+
+    def test_desfazer_abertura_reabre_a_caixa_fechada_junto(self):
+        self.ler(self.caixa1)
+        self.ler(self.caixa2)
+        self.ler(self.caixa1, confirmar=True)
+        leitura = self.ler(self.caixa2, confirmar=True).data["leitura"]
+        self.assertEqual(self.estoque_da(self.lapa), 1)
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.data["caixa"]["situacao"], "CHEGOU")
+        self.assertEqual(resposta.data["caixa_reaberta"]["numero"], 1)
+        self.caixa1.refresh_from_db()
+        self.assertEqual(self.caixa1.situacao, Caixa.Situacao.ABERTA)
+        self.assertIsNone(self.caixa1.acabou_em)
+        self.assertEqual(self.estoque_da(self.lapa), 2)
+
+    def test_so_desfaz_a_ultima_leitura_da_caixa(self):
+        primeira = self.ler(self.caixa1).data["leitura"]
+        self.ler(self.caixa1, confirmar=True)
+
+        resposta = self.desfazer(primeira)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["error"], "Essa caixa já foi lida de novo.")
+
+    def test_nao_desfaz_duas_vezes(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+        self.desfazer(leitura)
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["codigo"], "ja_desfeita")
+        self.assertEqual(self.estoque_da(self.fabrica), 5)
+
+    def test_prazo_de_10_minutos(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+        self.passar_tempo(11)
+
+        resposta = self.desfazer(leitura)
+
+        self.assertEqual(resposta.status_code, 409)
+        self.assertEqual(resposta.data["error"], "Passou o prazo para desfazer essa leitura.")
+
+    def test_outra_loja_nao_desfaz(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+
+        resposta = self.desfazer(leitura, usuario=self.moema.responsavel)
+
+        self.assertEqual(resposta.status_code, 403)
+        self.assertEqual(self.estoque_da(self.lapa), 1)
+
+    def test_leitura_inexistente(self):
+        resposta = self.desfazer("00000000-0000-0000-0000-000000000000")
+        self.assertEqual(resposta.status_code, 404)
+
+
+class CancelarDepoisDeDesfazerTests(CenarioDeLeitura):
+    """Caixa lida e desfeita volta para A_CAMINHO mas fica com LeituraCaixa
+    (todas desfeitas, por construcao): o cancelamento tem que apagar essas
+    leituras antes das caixas, ou o PROTECT da FK barra o delete."""
+
+    def test_cancelar_depois_de_desfazer_apaga_caixas_e_leituras(self):
+        leitura = self.ler(self.caixa1).data["leitura"]
+        self.desfazer(leitura)
+        gerente = criar_gerente("gerente@x.com", self.conta)
+        # O setUp autentica a loja; o cancelamento em EM_ENTREGA e so da gerencia.
+        self.client.force_authenticate(gerente)
+        resposta = self.client.patch(
+            f"/api/v1/pedidos/{self.pedido.public_id}/status/",
+            {"status": "CANCELADO"},
+            format="json",
+        )
+
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, Pedido.Status.CANCELADO)
+        self.assertFalse(Caixa.objects.filter(pedido=self.pedido).exists())
+        self.assertFalse(LeituraCaixa.objects.filter(caixa__pedido=self.pedido).exists())

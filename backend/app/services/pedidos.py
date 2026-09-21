@@ -15,7 +15,7 @@ delas.
 
 from django.db import transaction
 
-from app.models import Caixa, Estoque, MovimentacaoEstoque, Pedido
+from app.models import Caixa, Estoque, LeituraCaixa, MovimentacaoEstoque, Pedido
 from app.notifications import (
     notificar_estoque_baixo,
     notificar_estoques_baixos_do_pedido,
@@ -131,7 +131,10 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
         pedido.save(update_fields=['status', 'updated_at'])
 
         if anterior == Pedido.Status.EM_ENTREGA:
-            # Etiqueta de pedido cancelado nao pode continuar valendo.
+            # So cancela sem caixa lida (ver _conferir_cancelamento_em_entrega),
+            # entao toda LeituraCaixa destas caixas ja foi desfeita — apaga
+            # antes para o PROTECT da FK nao barrar o delete das caixas.
+            LeituraCaixa.objects.filter(caixa__pedido=pedido).delete()
             pedido.caixas.all().delete()
 
         if status_novo == Pedido.Status.ENTREGUE:

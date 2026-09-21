@@ -517,3 +517,4 @@ class DetalheEACaminhoTests(CenarioDeLeitura):
         resposta = self.client.get("/api/v1/caixas/a-caminho/")
         self.assertEqual(resposta.status_code, 403)
         self.assertEqual(resposta.data["error"], "Só o acesso de uma loja lê caixas.")
+        self.assertEqual(resposta.data["codigo"], "sem_loja")

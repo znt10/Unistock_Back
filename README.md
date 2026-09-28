@@ -81,6 +81,10 @@ Pontos que costumam pegar:
 - **`DB_HOST`** — dentro do Docker o compose sobrescreve para `db`. O valor do
   `.env` so vale se voce rodar o Django fora do container.
 - **`BOT_SERVICE_TOKEN`** — vazio desativa as rotas do bot de WhatsApp.
+- **`PROXY_SEGREDO`** — igual ao do front (`openssl rand -hex 32`). O front
+  reescreve `/backend/*` para a URL publica da api, entao sem ele todo
+  visitante chega com o IP do servidor e divide um limite so do throttle.
+  Obrigatorio no compose de producao.
 - **`EVOLUTION_API_KEY` / `EVOLUTION_POSTGRES_PASSWORD`** — obrigatorias para
   os servicos `evolution-*` subirem. Sem elas o `docker compose up` falha ao
   criar esses containers.

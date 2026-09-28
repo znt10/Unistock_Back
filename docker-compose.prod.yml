@@ -57,6 +57,10 @@ services:
       DB_HOST: db
       DB_PORT: "3306"
       CELERY_BROKER_URL: redis://redis:6379/0
+      # Contador do throttle (banco 2: o 0 e o Celery, o 1 e a Evolution).
+      CACHE_REDIS_URL: redis://redis:6379/2
+      # Igual ao PROXY_SEGREDO do front (openssl rand -hex 32).
+      PROXY_SEGREDO: ${PROXY_SEGREDO:?defina PROXY_SEGREDO}
       DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:?defina DJANGO_SUPERUSER_EMAIL}
       DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:?defina DJANGO_SUPERUSER_PASSWORD}
       EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}

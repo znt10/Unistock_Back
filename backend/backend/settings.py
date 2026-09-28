@@ -55,6 +55,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # Primeira da lista: o IP do visitante tem de estar certo antes de
+    # qualquer outra coisa ler o pedido. Ver app/middleware.py.
+    "app.middleware.IpDoProxyMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # Serve o /static/ (CSS e JS do /admin) direto do gunicorn em producao,
@@ -162,6 +165,22 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
+# O contador do throttle mora aqui. Sem Redis ele fica na memoria de cada
+# worker do gunicorn e o limite vale o triplo (--workers 3). Em dev e nos
+# testes fica o LocMemCache.
+_cache_redis = os.getenv("CACHE_REDIS_URL", "")
+CACHES = {
+    "default": (
+        {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": _cache_redis}
+        if _cache_redis
+        else {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    )
+}
+
+# Segredo que o Next manda junto com o IP do visitante (x-proxy-segredo).
+# Igual no front e no back; vazio desliga o cabecalho x-cliente-ip.
+PROXY_SEGREDO = os.getenv("PROXY_SEGREDO", "")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "app.authentication.CookieJWTAuthentication",
@@ -184,6 +203,10 @@ REST_FRAMEWORK = {
         "registro": "20/hour",
         "senha": "10/hour",
     },
+    # So o ultimo IP do X-Forwarded-For e confiavel (o que o Traefik
+    # acrescentou). Sem isto o DRF usa a lista inteira como identidade e
+    # quem troca o cabecalho a cada pedido nunca bate no limite.
+    "NUM_PROXIES": 1,
 }
 
 SIMPLE_JWT = {

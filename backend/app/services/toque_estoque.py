@@ -2,7 +2,7 @@
 
 Cada toque muda o estoque em um e registra um ToqueEstoque com o significado
 (producao na fabrica, correcao no resto). A regra de caixa da loja (-1 que
-fecha uma caixa do QR) esta aqui; o desfazer fica na proxima etapa.
+fecha uma caixa do QR) esta aqui, e tambem o desfazer do toque.
 
 Travas sempre na mesma ordem — caixa, depois linha de Estoque por id.
 """
@@ -13,7 +13,7 @@ from django.utils import timezone
 from app.models import Caixa, Estoque, Loja, MovimentacaoEstoque, ToqueEstoque
 from app.permissions import get_conta_do_usuario, is_admin, is_gerente
 from app.services.fabrica import caixas_a_caminho, segue_fluxo_fabrica
-from app.services.leitura_caixas import _linha_da_loja, _somar
+from app.services.leitura_caixas import PRAZO_PARA_DESFAZER, _linha_da_loja, _somar
 
 S = ToqueEstoque.Significado
 T = MovimentacaoEstoque.Tipo
@@ -47,6 +47,23 @@ class Zerado(ToqueRecusado):
 
 class CaixasACaminho(ToqueRecusado):
     codigo = "a_caminho"
+
+
+class ToqueNaoEncontrado(ToqueRecusado):
+    status = 404
+    codigo = "nao_encontrado"
+
+
+class ToqueJaDesfeito(ToqueRecusado):
+    codigo = "ja_desfeito"
+
+
+class PrazoPassou(ToqueRecusado):
+    codigo = "prazo"
+
+
+class CaixaMudou(ToqueRecusado):
+    codigo = "caixa_mudou"
 
 
 def _conferir_permissao(loja, usuario):
@@ -123,6 +140,18 @@ def _encerrar_caixa(caixa, loja, produto, usuario):
     )
 
 
+def _conferir_baixa(linha, loja, produto):
+    """Recusas de tirar 1 da linha (ja travada): zerado e, na fabrica, caixas a caminho."""
+    if linha.quantidade_atual < 1:
+        raise Zerado("O estoque já está zerado.")
+    if loja.tipo == Loja.Tipo.FABRICA:
+        a_caminho = caixas_a_caminho(loja, [produto.id]).get(produto.id, 0)
+        if linha.quantidade_atual - 1 < a_caminho:
+            raise CaixasACaminho(
+                f"Tem {a_caminho} caixas impressas a caminho; não dá para baixar mais."
+            )
+
+
 def tocar(loja, produto, delta, usuario):
     """Aplica um toque de +1 ou -1 e devolve o resumo para a tela."""
     _conferir_permissao(loja, usuario)
@@ -136,14 +165,7 @@ def tocar(loja, produto, delta, usuario):
         linha = Estoque.objects.select_for_update(of=("self",)).get(pk=linha.pk)
 
         if delta < 0:
-            if linha.quantidade_atual < 1:
-                raise Zerado("O estoque já está zerado.")
-            if loja.tipo == Loja.Tipo.FABRICA:
-                a_caminho = caixas_a_caminho(loja, [produto.id]).get(produto.id, 0)
-                if linha.quantidade_atual - 1 < a_caminho:
-                    raise CaixasACaminho(
-                        f"Tem {a_caminho} caixas impressas a caminho; não dá para baixar mais."
-                    )
+            _conferir_baixa(linha, loja, produto)
 
         _somar(linha, delta, usuario)
         situacao_anterior = None
@@ -169,3 +191,53 @@ def tocar(loja, produto, delta, usuario):
             if caixa is not None else None
         ),
     }
+
+
+def desfazer_toque(toque_id, usuario):
+    """Volta um toque dentro do prazo. Nada e apagado: grava o AJUSTE inverso.
+
+    Ordem de trava: caixa (se houver) -> Estoque. A primeira leitura do toque
+    e sem trava, so para achar o que travar; e relida (refresh_from_db) depois
+    das travas, antes de qualquer decisao.
+    """
+    with transaction.atomic():
+        toque = ToqueEstoque.objects.select_related("estoque__loja", "estoque__produto").filter(
+            public_id=toque_id
+        ).first()
+        if toque is None:
+            raise ToqueNaoEncontrado("Toque não encontrado.")
+        if toque.usuario_id != usuario.id:
+            raise SemPermissao("Só quem tocou pode desfazer.")
+
+        caixa = None
+        if toque.caixa_id:
+            caixa = Caixa.objects.select_for_update(of=("self",)).get(pk=toque.caixa_id)
+        linha = Estoque.objects.select_for_update(of=("self",)).get(pk=toque.estoque_id)
+        loja, produto = toque.estoque.loja, toque.estoque.produto
+        toque.refresh_from_db()
+
+        if toque.desfeito_em is not None:
+            raise ToqueJaDesfeito("Esse toque já foi desfeito.")
+        agora = timezone.now()
+        if agora - toque.created_at > PRAZO_PARA_DESFAZER:
+            raise PrazoPassou("Passou o prazo para desfazer esse toque.")
+        if toque.significado == S.FIM_DE_CAIXA and caixa.situacao != Caixa.Situacao.ACABOU:
+            raise CaixaMudou("Essa caixa mudou depois do toque.")
+
+        inverso = -toque.delta
+        if inverso < 0:
+            _conferir_baixa(linha, loja, produto)
+
+        _somar(linha, inverso, usuario)
+        if toque.significado == S.FIM_DE_CAIXA:
+            caixa.situacao = toque.situacao_anterior_da_caixa
+            caixa.acabou_em = None
+            caixa.save(update_fields=["situacao", "acabou_em", "updated_at"])
+        MovimentacaoEstoque.objects.create(
+            tipo=T.AJUSTE, produto=produto, loja_origem=loja,
+            quantidade=inverso, usuario=usuario,
+        )
+        toque.desfeito_em = agora
+        toque.save(update_fields=["desfeito_em"])
+
+    return {"produto": produto.nome_produto, "quantidade": linha.quantidade_atual}

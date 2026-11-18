@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from app.models import Caixa, Estoque, MovimentacaoEstoque, ToqueEstoque
@@ -287,3 +290,85 @@ class PermissaoDoToqueTests(CenarioDeToque):
         gerente = criar_gerente("gerente@outra.com", criar_conta("Outra"))
         r = self.tocar(self.lapa, self.detergente, 1, usuario=gerente)
         self.assertEqual(r.status_code, 403)
+
+
+class DesfazerToqueTests(CenarioDeToque):
+    def desfazer(self, toque, usuario=None):
+        if usuario is not None:
+            self.client.force_authenticate(usuario)
+        return self.client.post(f"/api/v1/toques/{toque}/desfazer/", format="json")
+
+    def test_desfazer_producao(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data, {"produto": self.coxinha.nome_produto, "quantidade": 5})
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 5)
+        mov = MovimentacaoEstoque.objects.get(tipo=T.AJUSTE)
+        self.assertEqual(mov.quantidade, -1)
+        self.assertEqual(mov.loja_origem, self.fabrica)
+        self.assertIsNotNone(ToqueEstoque.objects.get().desfeito_em)
+
+    def test_desfazer_fim_de_caixa_reabre_a_caixa(self):
+        for caixa in (self.caixa1, self.caixa2):
+            self.assertEqual(self.ler(caixa).status_code, 200)
+        self.assertEqual(self.ler(self.caixa1, confirmar=True).status_code, 200)
+        toque = self.tocar(self.lapa, self.coxinha, -1).data["toque"]
+        self.assertEqual(self.situacao(self.caixa1), "ACABOU")
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.situacao(self.caixa1), "ABERTA")
+        self.assertIsNone(Caixa.objects.get(pk=self.caixa1.pk).acabou_em)
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 2)
+        mov = MovimentacaoEstoque.objects.filter(tipo=T.AJUSTE).get()
+        self.assertEqual(mov.quantidade, 1)
+
+    def test_desfazer_duas_vezes(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        self.assertEqual(self.desfazer(toque).status_code, 200)
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "ja_desfeito")
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 5)
+
+    def test_desfazer_depois_do_prazo(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        ToqueEstoque.objects.update(created_at=timezone.now() - timedelta(minutes=11))
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "prazo")
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 6)
+
+    def test_so_quem_tocou_desfaz(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        r = self.desfazer(toque, usuario=self.lapa.responsavel)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["codigo"], "sem_permissao")
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 6)
+
+    def test_toque_inexistente(self):
+        r = self.desfazer("00000000-0000-0000-0000-000000000000")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.data["codigo"], "nao_encontrado")
+
+    def test_desfazer_producao_com_caixas_a_caminho(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]  # 6
+        self.imprimir(4)  # 2 + 4 = 6 a caminho
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "a_caminho")
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 6)
+        self.assertIsNone(ToqueEstoque.objects.get().desfeito_em)
+
+    def test_desfazer_mais_um_da_loja_zerada(self):
+        self.estoque_com(self.lapa, self.detergente, 0)
+        toque = self.tocar(self.lapa, self.detergente, 1).data["toque"]
+        Estoque.objects.filter(loja=self.lapa, produto=self.detergente).update(quantidade_atual=0)
+        r = self.desfazer(toque)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "zerado")

@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from app.models import Estoque, Loja, MovimentacaoEstoque, Produto
 from app.permissions import (
@@ -16,7 +17,7 @@ from app.permissions import (
     is_gerente_ou_admin,
 )
 from app.services.fabrica import segue_fluxo_fabrica
-from app.services.toque_estoque import ToqueRecusado, tocar as tocar_no_estoque
+from app.services.toque_estoque import ToqueRecusado, desfazer_toque, tocar as tocar_no_estoque
 from ..serializers import (
     EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
@@ -198,3 +199,18 @@ class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         return qs
+
+
+class DesfazerToqueView(APIView):
+    """POST /api/v1/toques/<id>/desfazer/ — volta um toque de +1/-1 (ate 10 min)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, toque_id):
+        try:
+            return Response(desfazer_toque(toque_id, request.user))
+        except ToqueRecusado as erro:
+            return Response(
+                {'error': erro.mensagem, 'codigo': erro.codigo, **erro.extras},
+                status=erro.status,
+            )

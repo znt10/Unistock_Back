@@ -342,6 +342,10 @@ class Estoque(BaseModel):
     # O motivo do campo nao e espaco de prateleira, e validade: produto parado
     # demais estraga. Por isso o excesso alerta, do mesmo jeito que a falta.
     quantidade_maxima = models.PositiveIntegerField()
+    # A gerencia ja salvou minimo/maximo desta linha? Linha criada sozinha
+    # (chegada de caixa, toque, pedido entregue) nasce com os sugeridos do
+    # produto e False; a tela de Minimo e maximo mostra "?" ate alguem salvar.
+    niveis_definidos = models.BooleanField(default=False)
     estado = models.CharField(
         max_length=20,
         choices=EstadoProduto.choices,

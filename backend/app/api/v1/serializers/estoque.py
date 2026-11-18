@@ -4,6 +4,10 @@ from app.models import Estoque, Loja, MovimentacaoEstoque, Notificacao, Produto
 from app.notifications import notificar_estoque_baixo, notificar_estoque_excedido
 
 
+# Salvar qualquer um destes marca a linha como "niveis definidos pela gerencia".
+NIVEIS = {"quantidade_minima", "quantidade_maxima"}
+
+
 class EstoqueSerializer(serializers.ModelSerializer):
     """Serializer de leitura de estoque."""
 
@@ -21,9 +25,11 @@ class EstoqueSerializer(serializers.ModelSerializer):
             "quantidade_atual",
             "quantidade_minima",
             "quantidade_maxima",
+            "niveis_definidos",
             "estado",
             "atualizado_em",
         ]
+        read_only_fields = ["niveis_definidos"]
 
 
 class EstoqueBaixoSerializer(serializers.ModelSerializer):
@@ -99,6 +105,8 @@ class EstoqueCreateSerializer(EstoqueWriteSerializer):
     """Serializer para criacao de estoque."""
 
     def create(self, validated_data):
+        if NIVEIS & validated_data.keys():
+            validated_data["niveis_definidos"] = True
         estoque = super().create(validated_data)
         request = self.context.get("request")
         editor = getattr(request, "user", None)
@@ -111,6 +119,8 @@ class EstoqueUpdateSerializer(EstoqueWriteSerializer):
     """Serializer para atualizacao de estoque."""
 
     def update(self, instance, validated_data):
+        if NIVEIS & validated_data.keys():
+            validated_data["niveis_definidos"] = True
         quantidade_anterior = instance.quantidade_atual
         estoque = super().update(instance, validated_data)
         request = self.context.get("request")

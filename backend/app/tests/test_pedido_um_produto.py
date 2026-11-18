@@ -80,8 +80,9 @@ class PedidoUmProdutoTests(TestCase):
                 usuario=self.fabrica.responsavel, tipo="novo_pedido"
             ).exists()
         )
-        aviso = Notificacao.objects.get(usuario=self.lapa.responsavel, tipo="pedido_criado")
-        self.assertIn("enviado para a fábrica", aviso.mensagem)
+        self.assertFalse(
+            Notificacao.objects.filter(usuario=self.lapa.responsavel, tipo="pedido_criado").exists()
+        )
 
     def test_pedido_da_fabrica_em_entrega_nao_edita(self):
         pedido = criar_pedido(

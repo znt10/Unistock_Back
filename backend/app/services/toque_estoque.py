@@ -2,16 +2,17 @@
 
 Cada toque muda o estoque em um e registra um ToqueEstoque com o significado
 (producao na fabrica, correcao no resto). A regra de caixa da loja (-1 que
-fecha uma caixa do QR) e do desfazer ficam nas proximas etapas.
+fecha uma caixa do QR) esta aqui; o desfazer fica na proxima etapa.
 
 Travas sempre na mesma ordem — caixa, depois linha de Estoque por id.
 """
 
 from django.db import transaction
+from django.utils import timezone
 
-from app.models import Estoque, Loja, MovimentacaoEstoque, ToqueEstoque
+from app.models import Caixa, Estoque, Loja, MovimentacaoEstoque, ToqueEstoque
 from app.permissions import get_conta_do_usuario, is_admin, is_gerente
-from app.services.fabrica import caixas_a_caminho
+from app.services.fabrica import caixas_a_caminho, segue_fluxo_fabrica
 from app.services.leitura_caixas import _linha_da_loja, _somar
 
 S = ToqueEstoque.Significado
@@ -86,12 +87,51 @@ def _movimentar(loja, produto, delta, usuario):
     )
 
 
+def _caixa_a_encerrar(loja, produto):
+    """Caixa da loja que o -1 fecha, ja travada: a ABERTA mais antiga, senao a
+    CHEGOU mais antiga. None se nao ha (ou se o produto nao segue o fluxo).
+
+    Tem de rodar ANTES de travar o Estoque (ordem caixa -> estoque).
+    """
+    if not segue_fluxo_fabrica(produto):
+        return None
+    caixas = list(
+        Caixa.objects.select_for_update(of=("self",))
+        .filter(
+            situacao__in=[Caixa.Situacao.ABERTA, Caixa.Situacao.CHEGOU],
+            pedido__loja=loja,
+            pedido__itens__produto=produto,
+        )
+        .select_related("pedido")
+        .order_by("id")
+    )
+    for situacao, campo in ((Caixa.Situacao.ABERTA, "aberta_em"), (Caixa.Situacao.CHEGOU, "chegou_em")):
+        candidatas = [c for c in caixas if c.situacao == situacao]
+        if candidatas:
+            # sem data (nao deveria ocorrer) vai para o fim; id desempata
+            return min(candidatas, key=lambda c: (getattr(c, campo) is None, getattr(c, campo) or 0, c.id))
+    return None
+
+
+def _encerrar_caixa(caixa, loja, produto, usuario):
+    """Fecha a caixa e registra a SAIDA de 1. Devolve a movimentacao."""
+    caixa.situacao = Caixa.Situacao.ACABOU
+    caixa.acabou_em = timezone.now()
+    caixa.save(update_fields=["situacao", "acabou_em", "updated_at"])
+    return MovimentacaoEstoque.objects.create(
+        tipo=T.SAIDA, produto=produto, loja_origem=loja, quantidade=1, usuario=usuario,
+    )
+
+
 def tocar(loja, produto, delta, usuario):
     """Aplica um toque de +1 ou -1 e devolve o resumo para a tela."""
     _conferir_permissao(loja, usuario)
     _conferir_produto(loja, produto)
 
     with transaction.atomic():
+        caixa = None
+        if delta < 0 and loja.tipo != Loja.Tipo.FABRICA:
+            caixa = _caixa_a_encerrar(loja, produto)
         linha = _linha_da_loja(loja, produto)
         linha = Estoque.objects.select_for_update(of=("self",)).get(pk=linha.pk)
 
@@ -106,10 +146,17 @@ def tocar(loja, produto, delta, usuario):
                     )
 
         _somar(linha, delta, usuario)
-        movimentacao, significado = _movimentar(loja, produto, delta, usuario)
+        situacao_anterior = None
+        if caixa is not None:
+            situacao_anterior = caixa.situacao
+            movimentacao = _encerrar_caixa(caixa, loja, produto, usuario)
+            significado = S.FIM_DE_CAIXA
+        else:
+            movimentacao, significado = _movimentar(loja, produto, delta, usuario)
         toque = ToqueEstoque.objects.create(
             estoque=linha, usuario=usuario, delta=delta,
             significado=significado, movimentacao=movimentacao,
+            caixa=caixa, situacao_anterior_da_caixa=situacao_anterior,
         )
 
     return {
@@ -117,5 +164,8 @@ def tocar(loja, produto, delta, usuario):
         "produto": produto.nome_produto,
         "quantidade": linha.quantidade_atual,
         "significado": significado,
-        "caixa": None,
+        "caixa": (
+            {"numero": caixa.numero, "total": caixa.pedido.caixas.count()}
+            if caixa is not None else None
+        ),
     }

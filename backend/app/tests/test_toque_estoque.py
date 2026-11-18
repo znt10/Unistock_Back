@@ -1,7 +1,7 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from app.models import Estoque, MovimentacaoEstoque, ToqueEstoque
+from app.models import Caixa, Estoque, MovimentacaoEstoque, ToqueEstoque
 from app.services.fabrica import imprimir_etiquetas
 from app.tests.fabricas import (
     criar_conta,
@@ -31,7 +31,8 @@ class CenarioDeToque(TestCase):
             loja=self.fabrica, produto=self.coxinha,
             quantidade_atual=5, quantidade_minima=0, quantidade_maxima=100,
         )
-        self.imprimir(2)
+        self.pedido = self.imprimir(2)
+        self.caixa1, self.caixa2 = self.pedido.caixas.order_by("numero")
         self.client = APIClient()
         self.client.force_authenticate(self.lapa.responsavel)
 
@@ -49,6 +50,16 @@ class CenarioDeToque(TestCase):
             {"loja": str(loja.public_id), "produto": str(produto.public_id), "delta": delta},
             format="json",
         )
+
+    def ler(self, caixa, confirmar=False, usuario=None):
+        if usuario is not None:
+            self.client.force_authenticate(usuario)
+        return self.client.post(
+            f"/api/v1/caixas/{caixa.codigo}/ler/", {"confirmar": confirmar}, format="json"
+        )
+
+    def situacao(self, caixa):
+        return Caixa.objects.get(pk=caixa.pk).situacao
 
     def quantidade(self, loja, produto):
         return Estoque.objects.get(loja=loja, produto=produto).quantidade_atual
@@ -173,6 +184,91 @@ class ToqueNaLojaTests(CenarioDeToque):
             format="json",
         )
         self.assertEqual(r.status_code, 404)
+
+
+class ToqueQueEncerraCaixaTests(CenarioDeToque):
+    """Lapa com as 2 caixas lidas (CHEGOU, estoque 2); -1 fecha uma caixa."""
+
+    def setUp(self):
+        super().setUp()
+        for caixa in (self.caixa1, self.caixa2):
+            self.assertEqual(self.ler(caixa).status_code, 200)
+
+    def test_menos_um_encerra_a_caixa_aberta(self):
+        self.assertEqual(self.ler(self.caixa1, confirmar=True).status_code, 200)  # abre
+        antes = MovimentacaoEstoque.objects.filter(tipo=T.SAIDA).count()
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.situacao(self.caixa1), "ACABOU")
+        self.assertEqual(self.situacao(self.caixa2), "CHEGOU")
+        self.assertIsNotNone(Caixa.objects.get(pk=self.caixa1.pk).acabou_em)
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+        self.assertEqual(r.data["quantidade"], 1)
+        self.assertEqual(MovimentacaoEstoque.objects.filter(tipo=T.SAIDA).count(), antes + 1)
+        mov = MovimentacaoEstoque.objects.filter(tipo=T.SAIDA).latest("id")
+        self.assertEqual(mov.quantidade, 1)
+        self.assertEqual(mov.loja_origem, self.lapa)
+        self.assertEqual(r.data["significado"], "FIM_DE_CAIXA")
+        toque = ToqueEstoque.objects.get()
+        self.assertEqual(toque.significado, "FIM_DE_CAIXA")
+        self.assertEqual(toque.caixa, self.caixa1)
+        self.assertEqual(toque.situacao_anterior_da_caixa, "ABERTA")
+        self.assertEqual(toque.movimentacao, mov)
+        self.assertEqual(r.data["caixa"], {"numero": 1, "total": 2})
+
+    def test_sem_aberta_encerra_a_chegou_mais_antiga(self):
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.situacao(self.caixa1), "ACABOU")
+        self.assertEqual(self.situacao(self.caixa2), "CHEGOU")
+        self.assertEqual(ToqueEstoque.objects.get().situacao_anterior_da_caixa, "CHEGOU")
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+
+    def test_ler_a_caixa_encerrada_nao_tira_de_novo(self):
+        self.tocar(self.lapa, self.coxinha, -1)
+        r = self.ler(self.caixa1, confirmar=True)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertTrue(r.data["ja_acabou"])
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+
+    def test_menos_um_e_abrir_a_proxima_tira_so_um(self):
+        self.ler(self.caixa1, confirmar=True)  # abre
+        self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+        r = self.ler(self.caixa2, confirmar=True)  # CHEGOU -> ABERTA
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.situacao(self.caixa2), "ABERTA")
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+
+    def test_caixa_de_outra_loja_nao_e_encerrada(self):
+        pedido = self.imprimir(1, loja=self.moema)
+        caixa_moema = pedido.caixas.get()
+        self.assertEqual(self.ler(caixa_moema, usuario=self.moema.responsavel).status_code, 200)
+        self.assertEqual(self.situacao(caixa_moema), "CHEGOU")
+        # Lapa sem caixa em jogo: zera as duas dela e da +1 por toque
+        Caixa.objects.filter(pedido=self.pedido).update(situacao="A_CAMINHO")
+        Estoque.objects.filter(loja=self.lapa, produto=self.coxinha).update(quantidade_atual=0)
+        self.assertEqual(self.tocar(self.lapa, self.coxinha, 1, usuario=self.lapa.responsavel).status_code, 200)
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["significado"], "CORRECAO")
+        self.assertIsNone(r.data["caixa"])
+        self.assertEqual(self.situacao(caixa_moema), "CHEGOU")
+
+    def test_zerado_nao_encerra_caixa(self):
+        Estoque.objects.filter(loja=self.lapa, produto=self.coxinha).update(quantidade_atual=0)
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "zerado")
+        self.assertEqual(self.situacao(self.caixa1), "CHEGOU")
+
+    def test_salgado_sem_caixa_e_correcao(self):
+        Caixa.objects.filter(pedido=self.pedido).update(situacao="ACABOU")
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["significado"], "CORRECAO")
+        self.assertIsNone(r.data["caixa"])
+        self.assertEqual(MovimentacaoEstoque.objects.filter(tipo=T.AJUSTE).count(), 1)
 
 
 class PermissaoDoToqueTests(CenarioDeToque):

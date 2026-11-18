@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from app.models import Caixa, Estoque, MovimentacaoEstoque, ToqueEstoque
+from app.models import Caixa, Estoque, MovimentacaoEstoque, Pedido, ToqueEstoque
 from app.services.fabrica import imprimir_etiquetas
 from app.tests.fabricas import (
     criar_conta,
@@ -125,6 +125,19 @@ class ToqueNaFabricaTests(CenarioDeToque):
         self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 5)
         self.assertEqual(MovimentacaoEstoque.objects.count(), antes)
 
+    def test_fabrica_uma_caixa_a_caminho_fala_no_singular(self):
+        pastel = criar_produto(self.conta, "Pastel")
+        Estoque.objects.create(
+            loja=self.fabrica, produto=pastel,
+            quantidade_atual=1, quantidade_minima=0, quantidade_maxima=100,
+        )
+        pedido = criar_pedido(self.lapa, pastel, quantidade=1, da_fabrica=True)
+        self.assertEqual(imprimir_etiquetas(self.fabrica, [pedido.public_id]).recusados, [])
+        self.client.force_authenticate(self.fabrica.responsavel)
+        r = self.tocar(self.fabrica, pastel, -1)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["error"], "Tem 1 caixa impressa a caminho; não dá para baixar mais.")
+
     def test_fabrica_produto_que_nao_vem_da_fabrica(self):
         r = self.tocar(self.fabrica, self.detergente, 1)
         self.assertEqual(r.status_code, 400)
@@ -218,6 +231,45 @@ class ToqueQueEncerraCaixaTests(CenarioDeToque):
         self.assertEqual(toque.situacao_anterior_da_caixa, "ABERTA")
         self.assertEqual(toque.movimentacao, mov)
         self.assertEqual(r.data["caixa"], {"numero": 1, "total": 2})
+
+    def test_produto_que_deixou_de_vir_da_fabrica_ainda_fecha_a_caixa(self):
+        # o estado da caixa decide (mesma regra de ler_caixa), nao o cadastro
+        self.ler(self.caixa1, confirmar=True)  # abre
+        self.coxinha.vem_da_fabrica = False
+        self.coxinha.save()
+        r = self.tocar(self.lapa, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["significado"], "FIM_DE_CAIXA")
+        self.assertEqual(self.situacao(self.caixa1), "ACABOU")
+        r = self.ler(self.caixa2, confirmar=True)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.quantidade(self.lapa, self.coxinha), 1)
+
+    def test_cancelar_pedido_depois_de_desfazer_toque_e_leitura(self):
+        self.client.force_authenticate(self.lapa.responsavel)
+        # setUp leu as 2 caixas; volta caixa2 e deixa so a caixa1 lida
+        leitura2 = self.ler(self.caixa2, confirmar=True)  # CHEGOU -> ABERTA, so p/ ter id
+        self.assertEqual(leitura2.status_code, 200, leitura2.data)
+        self.client.post(f"/api/v1/leituras/{leitura2.data['leitura']}/desfazer/", format="json")
+        toque = self.tocar(self.lapa, self.coxinha, -1).data["toque"]  # fecha a caixa1 (CHEGOU)
+        self.assertEqual(self.situacao(self.caixa1), "ACABOU")
+        r = self.client.post(f"/api/v1/toques/{toque}/desfazer/", format="json")
+        self.assertEqual(r.status_code, 200, r.data)
+        for caixa in (self.caixa1, self.caixa2):
+            leitura = caixa.leituras.filter(desfeita_em__isnull=True).first()
+            if leitura is not None:
+                r = self.client.post(f"/api/v1/leituras/{leitura.public_id}/desfazer/", format="json")
+                self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.situacao(self.caixa1), "A_CAMINHO")
+        self.assertEqual(self.situacao(self.caixa2), "A_CAMINHO")
+        self.client.force_authenticate(criar_gerente("gerente@x.com", self.conta))
+        r = self.client.patch(
+            f"/api/v1/pedidos/{self.pedido.public_id}/status/", {"status": "CANCELADO"}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.data)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.status, Pedido.Status.CANCELADO)
+        self.assertFalse(Caixa.objects.filter(pedido=self.pedido).exists())
 
     def test_sem_aberta_encerra_a_chegou_mais_antiga(self):
         r = self.tocar(self.lapa, self.coxinha, -1)

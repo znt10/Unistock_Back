@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from app.models import Caixa, Estoque, Loja, MovimentacaoEstoque, Produto, ToqueEstoque
 from app.permissions import get_conta_do_usuario, is_admin, is_gerente
-from app.services.fabrica import caixas_a_caminho, segue_fluxo_fabrica
+from app.services.fabrica import _caixas, caixas_a_caminho
 from app.services.leitura_caixas import PRAZO_PARA_DESFAZER, _linha_da_loja, _somar
 
 S = ToqueEstoque.Significado
@@ -109,12 +109,11 @@ def _movimentar(loja, produto, delta, usuario):
 
 def _caixa_a_encerrar(loja, produto):
     """Caixa da loja que o -1 fecha, ja travada: a ABERTA mais antiga, senao a
-    CHEGOU mais antiga. None se nao ha (ou se o produto nao segue o fluxo).
+    CHEGOU mais antiga. None se nao ha. O estado da caixa decide (mesma regra
+    de ler_caixa): produto sem caixas nao acha nenhuma e fica em AJUSTE.
 
     Tem de rodar ANTES de travar o Estoque (ordem caixa -> estoque).
     """
-    if not segue_fluxo_fabrica(produto):
-        return None
     caixas = list(
         Caixa.objects.select_for_update(of=("self",))
         .filter(
@@ -151,7 +150,8 @@ def _conferir_baixa(linha, loja, produto):
         a_caminho = caixas_a_caminho(loja, [produto.id]).get(produto.id, 0)
         if linha.quantidade_atual - 1 < a_caminho:
             raise CaixasACaminho(
-                f"Tem {a_caminho} caixas impressas a caminho; não dá para baixar mais."
+                f"Tem {a_caminho} {_caixas(a_caminho)} "
+                f"{'impressa' if a_caminho == 1 else 'impressas'} a caminho; não dá para baixar mais."
             )
 
 

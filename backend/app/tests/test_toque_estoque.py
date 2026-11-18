@@ -1,0 +1,193 @@
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+from app.models import Estoque, MovimentacaoEstoque, ToqueEstoque
+from app.services.fabrica import imprimir_etiquetas
+from app.tests.fabricas import (
+    criar_conta,
+    criar_fabrica,
+    criar_gerente,
+    criar_loja,
+    criar_pedido,
+    criar_produto,
+)
+
+T = MovimentacaoEstoque.Tipo
+
+
+class CenarioDeToque(TestCase):
+    """Fabrica com 5 caixas de coxinha e um pedido de 2 da Lapa ja impresso."""
+
+    def setUp(self):
+        self.conta = criar_conta()
+        self.fabrica = criar_fabrica(self.conta)
+        self.lapa = criar_loja(self.conta, "Lapa")
+        self.moema = criar_loja(self.conta, "Moema")
+        self.coxinha = criar_produto(self.conta)
+        self.detergente = criar_produto(
+            self.conta, "Detergente", categoria="Mercado", vem_da_fabrica=False
+        )
+        self.estoque_fabrica = Estoque.objects.create(
+            loja=self.fabrica, produto=self.coxinha,
+            quantidade_atual=5, quantidade_minima=0, quantidade_maxima=100,
+        )
+        self.imprimir(2)
+        self.client = APIClient()
+        self.client.force_authenticate(self.lapa.responsavel)
+
+    def imprimir(self, quantidade, loja=None):
+        pedido = criar_pedido(loja or self.lapa, self.coxinha, quantidade=quantidade, da_fabrica=True)
+        resultado = imprimir_etiquetas(self.fabrica, [pedido.public_id])
+        self.assertEqual(resultado.recusados, [])
+        return pedido
+
+    def tocar(self, loja, produto, delta, usuario=None):
+        if usuario is not None:
+            self.client.force_authenticate(usuario)
+        return self.client.post(
+            "/api/v1/estoque/tocar/",
+            {"loja": str(loja.public_id), "produto": str(produto.public_id), "delta": delta},
+            format="json",
+        )
+
+    def quantidade(self, loja, produto):
+        return Estoque.objects.get(loja=loja, produto=produto).quantidade_atual
+
+    def estoque_com(self, loja, produto, quantidade):
+        return Estoque.objects.create(
+            loja=loja, produto=produto,
+            quantidade_atual=quantidade, quantidade_minima=0, quantidade_maxima=100,
+        )
+
+
+class ToqueNaFabricaTests(CenarioDeToque):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.fabrica.responsavel)
+
+    def test_fabrica_mais_um_e_producao(self):
+        r = self.tocar(self.fabrica, self.coxinha, 1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["quantidade"], 6)
+        self.assertEqual(r.data["significado"], "PRODUCAO")
+        self.assertIsNone(r.data["caixa"])
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 6)
+        mov = MovimentacaoEstoque.objects.get(tipo=T.ENTRADA)
+        self.assertEqual(mov.quantidade, 1)
+        self.assertEqual(mov.loja_destino, self.fabrica)
+        self.assertEqual(mov.usuario, self.fabrica.responsavel)
+        toque = ToqueEstoque.objects.get()
+        self.assertEqual(toque.significado, ToqueEstoque.Significado.PRODUCAO)
+        self.assertEqual(toque.usuario, self.fabrica.responsavel)
+        self.assertEqual(toque.movimentacao, mov)
+        self.assertEqual(r.data["toque"], str(toque.public_id))
+
+    def test_fabrica_mais_um_cria_a_linha(self):
+        novo = criar_produto(self.conta, "Risole")
+        r = self.tocar(self.fabrica, novo, 1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["quantidade"], 1)
+        linha = Estoque.objects.get(loja=self.fabrica, produto=novo)
+        self.assertEqual(linha.quantidade_minima, novo.estoque_minimo_sugerido)
+
+    def test_fabrica_menos_um_e_correcao(self):
+        # o setUp imprimiu 2 caixas; sobram 3 de folga
+        r = self.tocar(self.fabrica, self.coxinha, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["quantidade"], 4)
+        self.assertEqual(r.data["significado"], "CORRECAO")
+        mov = MovimentacaoEstoque.objects.get(tipo=T.AJUSTE)
+        self.assertEqual(mov.quantidade, -1)
+        self.assertEqual(mov.loja_origem, self.fabrica)
+        self.assertEqual(ToqueEstoque.objects.get().significado, "CORRECAO")
+
+    def test_fabrica_nao_baixa_abaixo_das_caixas_a_caminho(self):
+        self.imprimir(3)  # 2 + 3 = 5 a caminho, estoque 5
+        antes = MovimentacaoEstoque.objects.count()
+        r = self.tocar(self.fabrica, self.coxinha, -1)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "a_caminho")
+        self.assertEqual(r.data["error"], "Tem 5 caixas impressas a caminho; não dá para baixar mais.")
+        self.assertEqual(self.quantidade(self.fabrica, self.coxinha), 5)
+        self.assertEqual(MovimentacaoEstoque.objects.count(), antes)
+
+    def test_fabrica_produto_que_nao_vem_da_fabrica(self):
+        r = self.tocar(self.fabrica, self.detergente, 1)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["codigo"], "produto_invalido")
+        self.assertEqual(r.data["error"], "Esse produto não vem da fábrica.")
+
+
+class ToqueNaLojaTests(CenarioDeToque):
+    def test_loja_mais_um_em_salgado_e_correcao(self):
+        r = self.tocar(self.lapa, self.coxinha, 1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["quantidade"], 1)
+        self.assertEqual(r.data["significado"], "CORRECAO")
+        mov = MovimentacaoEstoque.objects.get(tipo=T.AJUSTE)
+        self.assertEqual(mov.quantidade, 1)
+        self.assertEqual(mov.loja_origem, self.lapa)
+
+    def test_loja_menos_um_sem_caixa_e_correcao(self):
+        self.estoque_com(self.lapa, self.detergente, 3)
+        r = self.tocar(self.lapa, self.detergente, -1)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["quantidade"], 2)
+        self.assertEqual(r.data["significado"], "CORRECAO")
+        mov = MovimentacaoEstoque.objects.get(tipo=T.AJUSTE)
+        self.assertEqual(mov.quantidade, -1)
+        self.assertEqual(mov.loja_origem, self.lapa)
+
+    def test_nao_fica_negativo(self):
+        self.estoque_com(self.lapa, self.detergente, 0)
+        antes = MovimentacaoEstoque.objects.count()
+        r = self.tocar(self.lapa, self.detergente, -1)
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.data["codigo"], "zerado")
+        self.assertEqual(r.data["error"], "O estoque já está zerado.")
+        self.assertEqual(MovimentacaoEstoque.objects.count(), antes)
+        self.assertEqual(ToqueEstoque.objects.count(), 0)
+
+    def test_dois_toques_seguidos_somam(self):
+        self.tocar(self.lapa, self.detergente, 1)
+        r = self.tocar(self.lapa, self.detergente, 1)
+        self.assertEqual(r.data["quantidade"], 2)
+        self.assertEqual(ToqueEstoque.objects.count(), 2)
+
+    def test_delta_invalido(self):
+        r = self.tocar(self.lapa, self.detergente, 2)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(ToqueEstoque.objects.count(), 0)
+
+    def test_produto_de_outra_conta(self):
+        outro = criar_produto(criar_conta("Outra"), "Pao", vem_da_fabrica=False)
+        r = self.tocar(self.lapa, outro, 1)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.data["codigo"], "produto_invalido")
+
+    def test_loja_ou_produto_inexistente(self):
+        r = self.client.post(
+            "/api/v1/estoque/tocar/",
+            {"loja": "00000000-0000-4000-8000-000000000000",
+             "produto": str(self.detergente.public_id), "delta": 1},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 404)
+
+
+class PermissaoDoToqueTests(CenarioDeToque):
+    def test_responsavel_de_outra_loja_nao_toca(self):
+        r = self.tocar(self.lapa, self.detergente, 1, usuario=self.moema.responsavel)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["codigo"], "sem_permissao")
+        self.assertEqual(r.data["error"], "Você só mexe no estoque da sua loja.")
+
+    def test_gerente_da_conta_toca(self):
+        gerente = criar_gerente("gerente@x.com", self.conta)
+        r = self.tocar(self.lapa, self.detergente, 1, usuario=gerente)
+        self.assertEqual(r.status_code, 200, r.data)
+
+    def test_gerente_de_outra_conta_nao_toca(self):
+        gerente = criar_gerente("gerente@outra.com", criar_conta("Outra"))
+        r = self.tocar(self.lapa, self.detergente, 1, usuario=gerente)
+        self.assertEqual(r.status_code, 403)

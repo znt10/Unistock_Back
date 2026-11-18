@@ -7,10 +7,13 @@ fecha uma caixa do QR) esta aqui, e tambem o desfazer do toque.
 Travas sempre na mesma ordem — caixa, depois linha de Estoque por id.
 """
 
+from datetime import timedelta
+
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
-from app.models import Caixa, Estoque, Loja, MovimentacaoEstoque, ToqueEstoque
+from app.models import Caixa, Estoque, Loja, MovimentacaoEstoque, Produto, ToqueEstoque
 from app.permissions import get_conta_do_usuario, is_admin, is_gerente
 from app.services.fabrica import caixas_a_caminho, segue_fluxo_fabrica
 from app.services.leitura_caixas import PRAZO_PARA_DESFAZER, _linha_da_loja, _somar
@@ -241,3 +244,45 @@ def desfazer_toque(toque_id, usuario):
         toque.save(update_fields=["desfeito_em"])
 
     return {"produto": produto.nome_produto, "quantidade": linha.quantidade_atual}
+
+
+def itens_da_minha_loja(loja):
+    """Lista da tela do celular: produtos da loja com a quantidade e, na
+    fabrica, o que foi produzido hoje. Duas consultas fixas, sem N+1."""
+    fabrica = loja.tipo == Loja.Tipo.FABRICA
+    produtos = Produto.objects.filter(conta_id=loja.conta_id, is_deleted=False).select_related("categoria")
+    if fabrica:
+        produtos = produtos.filter(vem_da_fabrica=True)
+
+    linhas = dict(
+        Estoque.objects.filter(loja=loja).values_list("produto_id", "quantidade_atual")
+    )
+
+    hoje = {}
+    if fabrica:
+        # dia local (America/Sao_Paulo), nao o dia em UTC
+        inicio = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
+        fim = inicio + timedelta(days=1)
+        hoje = dict(
+            ToqueEstoque.objects.filter(
+                estoque__loja=loja, significado=S.PRODUCAO, desfeito_em__isnull=True,
+                created_at__gte=inicio, created_at__lt=fim,
+            )
+            .values("estoque__produto_id")
+            .annotate(total=Sum("delta"))
+            .values_list("estoque__produto_id", "total")
+        )
+
+    itens = []
+    for produto in produtos:
+        categoria = produto.categoria
+        itens.append({
+            "produto": str(produto.public_id),
+            "produto_nome": produto.nome_produto,
+            "categoria": categoria.nome if categoria else "Sem categoria",
+            "categoria_ordem": categoria.ordem if categoria else 999,
+            "quantidade": linhas.get(produto.id, 0),
+            "hoje": hoje.get(produto.id, 0) if fabrica else None,
+        })
+    itens.sort(key=lambda i: (i["categoria_ordem"], i["categoria"], i["produto_nome"]))
+    return itens

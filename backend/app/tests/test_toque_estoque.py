@@ -372,3 +372,54 @@ class DesfazerToqueTests(CenarioDeToque):
         r = self.desfazer(toque)
         self.assertEqual(r.status_code, 409)
         self.assertEqual(r.data["codigo"], "zerado")
+
+
+class MinhaLojaTests(CenarioDeToque):
+    def listar(self, usuario=None):
+        if usuario is not None:
+            self.client.force_authenticate(usuario)
+        return self.client.get("/api/v1/estoque/minha-loja/")
+
+    def test_minha_loja_lista_todos_os_produtos(self):
+        r = self.listar()
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(
+            r.data["loja"],
+            {"id": str(self.lapa.public_id), "nome": "Lapa", "fabrica": False},
+        )
+        por_nome = {i["produto_nome"]: i for i in r.data["itens"]}
+        self.assertEqual(set(por_nome), {"Coxinha", "Detergente"})
+        coxinha = por_nome["Coxinha"]
+        self.assertEqual(coxinha["produto"], str(self.coxinha.public_id))
+        self.assertEqual(coxinha["categoria"], "Salgados grande")
+        self.assertEqual(coxinha["quantidade"], 0)
+        self.assertIsNone(coxinha["hoje"])
+        self.assertIsNone(por_nome["Detergente"]["hoje"])
+
+    def test_fabrica_ve_so_os_dela_e_o_hoje(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        self.tocar(self.fabrica, self.coxinha, 1)
+        segundo = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        self.client.post(f"/api/v1/toques/{segundo}/desfazer/", format="json")
+        r = self.listar()
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["loja"]["fabrica"], True)
+        self.assertEqual([i["produto_nome"] for i in r.data["itens"]], ["Coxinha"])
+        item = r.data["itens"][0]
+        self.assertEqual(item["hoje"], 1)
+        self.assertEqual(item["quantidade"], 6)
+
+    def test_hoje_ignora_ontem(self):
+        self.client.force_authenticate(self.fabrica.responsavel)
+        toque = self.tocar(self.fabrica, self.coxinha, 1).data["toque"]
+        ontem = timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=1)
+        ToqueEstoque.objects.filter(public_id=toque).update(created_at=ontem)
+        item = self.listar().data["itens"][0]
+        self.assertEqual(item["hoje"], 0)
+        self.assertEqual(item["quantidade"], 6)
+
+    def test_gerente_sem_loja(self):
+        gerente = criar_gerente("g@x.com", self.conta)
+        r = self.listar(gerente)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.data["codigo"], "sem_loja")

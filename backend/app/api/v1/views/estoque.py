@@ -17,7 +17,7 @@ from app.permissions import (
     is_gerente_ou_admin,
 )
 from app.services.fabrica import segue_fluxo_fabrica
-from app.services.toque_estoque import ToqueRecusado, desfazer_toque, tocar as tocar_no_estoque
+from app.services.toque_estoque import ToqueRecusado, desfazer_toque, itens_da_minha_loja, tocar as tocar_no_estoque
 from ..serializers import (
     EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
@@ -82,6 +82,26 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         """
         estoques = self.get_queryset().excedidos()
         return Response(EstoqueBaixoSerializer(estoques, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='minha-loja')
+    def minha_loja(self, request):
+        """Lista da tela do celular: Estoque da loja ou Producao do dia da fabrica."""
+        loja = Loja.objects.filter(
+            responsavel=request.user, ativo=True, is_deleted=False
+        ).first()
+        if loja is None:
+            return Response(
+                {'error': 'Você não tem uma loja para mexer no estoque.', 'codigo': 'sem_loja'},
+                status=403,
+            )
+        return Response({
+            'loja': {
+                'id': str(loja.public_id),
+                'nome': loja.nome_loja,
+                'fabrica': loja.tipo == Loja.Tipo.FABRICA,
+            },
+            'itens': itens_da_minha_loja(loja),
+        })
 
     @action(detail=False, methods=['post'], url_path='tocar')
     def tocar(self, request):

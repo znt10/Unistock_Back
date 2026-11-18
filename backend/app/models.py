@@ -407,6 +407,42 @@ class MovimentacaoEstoque(BaseModel):
         return f"{self.tipo} {self.quantidade}x {self.produto.nome_produto}"
 
 
+class ToqueEstoque(BaseModel):
+    """Um toque de +1/-1 no celular: o que ele significou, para poder desfazer.
+
+    O significado diz por que o numero mudou: PRODUCAO (fabrica +1),
+    FIM_DE_CAIXA (loja -1 que fecha uma caixa do QR) ou CORRECAO (o resto).
+    Quando fecha uma caixa, guarda qual e como ela estava antes.
+
+    Toque desfeito nao e apagado: ganha desfeito_em, e o historico continua.
+    """
+
+    class Significado(models.TextChoices):
+        PRODUCAO = "PRODUCAO", "Produção"
+        CORRECAO = "CORRECAO", "Correção"
+        FIM_DE_CAIXA = "FIM_DE_CAIXA", "Fim de caixa"
+
+    estoque = models.ForeignKey(Estoque, on_delete=models.PROTECT, related_name="toques")
+    usuario = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="toques_de_estoque"
+    )
+    delta = models.SmallIntegerField()
+    significado = models.CharField(max_length=12, choices=Significado.choices)
+    movimentacao = models.ForeignKey(
+        MovimentacaoEstoque, on_delete=models.PROTECT, related_name="+"
+    )
+    caixa = models.ForeignKey(
+        Caixa, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    situacao_anterior_da_caixa = models.CharField(
+        max_length=10, choices=Caixa.Situacao.choices, null=True, blank=True
+    )
+    desfeito_em = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.delta:+d} {self.significado} em {self.estoque_id}"
+
+
 class PreferenciaNotificacao(BaseModel):
     """Canais de notificacao do usuario.
 

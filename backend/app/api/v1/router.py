@@ -10,6 +10,7 @@ from .views.fabrica import (
     FabricaProducaoView,
 )
 from .views.mudancas import MudancasView
+from .views.estoque import DesfazerToqueView
 from .views.leitura_caixas import ACaminhoView, DesfazerLeituraView, DetalheDaCaixaView, LerCaixaView
 
 router = DefaultRouter()
@@ -41,5 +42,6 @@ urlpatterns = router.urls + [
     path('caixas/a-caminho/', ACaminhoView.as_view(), name='caixas-a-caminho'),
     path('caixas/<str:codigo>/ler/', LerCaixaView.as_view(), name='caixa-ler'),
     path('caixas/<str:codigo>/', DetalheDaCaixaView.as_view(), name='caixa-detalhe'),
+    path('toques/<uuid:toque_id>/desfazer/', DesfazerToqueView.as_view(), name='toque-desfazer'),
     path('leituras/<uuid:leitura_id>/desfazer/', DesfazerLeituraView.as_view(), name='leitura-desfazer'),
 ]

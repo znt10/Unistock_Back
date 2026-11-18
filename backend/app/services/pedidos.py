@@ -15,7 +15,7 @@ delas.
 
 from django.db import transaction
 
-from app.models import Caixa, Estoque, LeituraCaixa, MovimentacaoEstoque, Pedido
+from app.models import Caixa, Estoque, LeituraCaixa, MovimentacaoEstoque, Pedido, ToqueEstoque
 from app.notifications import (
     notificar_estoque_baixo,
     notificar_estoques_baixos_do_pedido,
@@ -155,6 +155,9 @@ def mudar_status(pedido_id, status_novo, *, usuario_editor):
             # recusado). Nao apaga: e historico do outro pedido, so solta a
             # referencia.
             LeituraCaixa.objects.filter(caixa_fechada__pedido=pedido).update(caixa_fechada=None)
+            # Toque de fim de caixa desfeito tambem guarda a caixa (PROTECT):
+            # e historico do estoque, so solta a referencia.
+            ToqueEstoque.objects.filter(caixa__pedido=pedido).update(caixa=None)
             pedido.caixas.all().delete()
 
         if status_novo == Pedido.Status.ENTREGUE:

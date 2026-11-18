@@ -1,11 +1,13 @@
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from app.models import Estoque, Loja, MovimentacaoEstoque
+from app.models import Estoque, Loja, MovimentacaoEstoque, Produto
 from app.permissions import (
     IsGerenteOrAdministradorOrResponsavel,
     escopar_por_conta,
@@ -15,6 +17,7 @@ from app.permissions import (
     is_gerente_ou_admin,
 )
 from app.services.fabrica import segue_fluxo_fabrica
+from app.services.toque_estoque import ToqueRecusado, desfazer_toque, itens_da_minha_loja, tocar as tocar_no_estoque
 from ..serializers import (
     EstoqueBaixoSerializer,
     EstoqueCreateSerializer,
@@ -79,6 +82,52 @@ class EstoqueViewSet(viewsets.ModelViewSet):
         """
         estoques = self.get_queryset().excedidos()
         return Response(EstoqueBaixoSerializer(estoques, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='minha-loja')
+    def minha_loja(self, request):
+        """Lista da tela do celular: Estoque da loja ou Producao do dia da fabrica."""
+        loja = Loja.objects.filter(
+            responsavel=request.user, ativo=True, is_deleted=False
+        ).first()
+        if loja is None:
+            return Response(
+                {'error': 'Você não tem uma loja para mexer no estoque.', 'codigo': 'sem_loja'},
+                status=403,
+            )
+        return Response({
+            'loja': {
+                'id': str(loja.public_id),
+                'nome': loja.nome_loja,
+                'fabrica': loja.tipo == Loja.Tipo.FABRICA,
+            },
+            'itens': itens_da_minha_loja(loja),
+        })
+
+    @action(detail=False, methods=['post'], url_path='tocar')
+    def tocar(self, request):
+        """Toque de +1/-1 no celular. A regra mora em services/toque_estoque.py."""
+        delta = request.data.get('delta')
+        if isinstance(delta, bool) or delta not in (1, -1):
+            return Response(
+                {'error': 'O toque é +1 ou −1.', 'codigo': 'delta_invalido'}, status=400
+            )
+        try:
+            loja = Loja.objects.get(
+                public_id=request.data.get('loja'), is_deleted=False, ativo=True
+            )
+            produto = Produto.objects.get(public_id=request.data.get('produto'), is_deleted=False)
+        except (Loja.DoesNotExist, Produto.DoesNotExist, ValidationError, ValueError):
+            return Response(
+                {'error': 'Loja ou produto não encontrado.', 'codigo': 'nao_encontrado'},
+                status=404,
+            )
+        try:
+            return Response(tocar_no_estoque(loja, produto, delta, request.user))
+        except ToqueRecusado as erro:
+            return Response(
+                {'error': erro.mensagem, 'codigo': erro.codigo, **erro.extras},
+                status=erro.status,
+            )
 
     def _validar_loja_do_responsavel(self, user, loja):
         if is_admin(user):
@@ -170,3 +219,18 @@ class MovimentacaoEstoqueViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         return qs
+
+
+class DesfazerToqueView(APIView):
+    """POST /api/v1/toques/<id>/desfazer/ — volta um toque de +1/-1 (ate 10 min)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, toque_id):
+        try:
+            return Response(desfazer_toque(toque_id, request.user))
+        except ToqueRecusado as erro:
+            return Response(
+                {'error': erro.mensagem, 'codigo': erro.codigo, **erro.extras},
+                status=erro.status,
+            )

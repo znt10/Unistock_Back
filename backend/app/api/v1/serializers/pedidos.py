@@ -191,16 +191,8 @@ class PedidoCreateSerializer(PedidoWriteSerializer):
             )
             for destinatario in destinatarios.values()
         ])
-
-        destino = "a fábrica" if pedido.da_fabrica else "analise"
-        Notificacao.objects.create(
-            usuario=user,
-            pedido=pedido,
-            loja=pedido.loja,
-            tipo="pedido_criado",
-            titulo="Pedido criado com sucesso",
-            mensagem=f"Seu pedido para {pedido.loja.nome_loja} foi enviado para {destino}.",
-        )
+        # Quem criou o pedido nao e avisado dele: acabou de fazer, so enchia
+        # a lista de notificacoes.
 
         return pedido
 
